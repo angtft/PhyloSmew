@@ -1,0 +1,67 @@
+# software used for analyses - paths need to be set!
+# RAxML-NG and IQ-TREE2 paths should be fine, as they are part of RAxMLGroveScripts
+# tqDist needs to be downloaded and the path set
+# (FastTree2 is not needed if it is removed from the tool_list in the Snakefile, as it is only used for accuracy stuff)
+software:
+  raxml_ng:
+    command: "libs/RAxMLGroveScripts/tools/raxml-ng_v1.1.0_linux_x86_64/raxml-ng"         # path to executable
+    model: "GTR+G"
+  iqtree2:
+    command: "libs/RAxMLGroveScripts/tools/iqtree-2.2.0-beta-Linux/bin/iqtree2"
+    model: "GTR+G"
+  fasttree2:
+    command: "../FastTree2/FastTreeDbl"
+    model: "-gtr -gamma"
+  tqdist:
+    command: "../tqDist-1.0.2/bin/all_pairs_quartet_dist"
+
+
+data_sets:
+  used_dsc: "tb_test"             # criteria to be used for the experiments. can be defined below
+  sort_by:                        # attribute by which the datasets are sorted (no need to change, probably)
+    RGS: "PATTERNS_BY_TAXA"
+    TB: "PATTERNS_BY_TAXA"
+    RGS_TB: "PATTERNS_BY_TAXA"
+
+  # Example selection criteria:
+  # example:        # name of the selection criteria
+    # source:       # where to get data from. possible inputs are:
+                    #   RGS - RAxMLGrove simulated MSAs using BONK gap insertion by default
+                    #   TB  - TreeBASE empirical MSAs
+                    #   RGS-TB - simulated MSAs based on TreeBASE datasets
+    # query:        # RGS database query (see https://github.com/angtft/RAxMLGroveScripts)
+    # num_points:   # number of selected datasets from the RGS database
+    # num_repeats:  # number of independent analyses per selected dataset (careful: makes only sense for simulated data,
+                    #   since every run yields a different MSA
+
+  test:
+    source: "RGS"
+    query: "NUM_TAXA < 20 and OVERALL_NUM_ALIGNMENT_SITES < 1000 and OVERALL_NUM_ALIGNMENT_SITES > 0 and MODEL like 'GTR%' and FREQ_A and RATE_AC"
+    num_points: 3
+    num_repeats: 2
+  dsc6_0_7:
+    source: "RGS"
+    query: "NUM_TAXA < 470 and OVERALL_NUM_PATTERNS < 18764 and DATA_TYPE = 'DNA' and MODEL like 'GTR%' and OVERALL_NUM_ALIGNMENT_SITES > 0 and FREQ_A and RATE_AC"
+    num_points: 20000
+    num_repeats: 1
+  tb_test:
+    source: "TB"
+    query: "DATA_TYPE = 'DNA' and NUM_TAXA < 100 and OVERALL_NUM_PATTERNS < 500"
+    num_points: 5
+    num_repeats: 1
+  tb_5000:
+    source: "TB"
+    query: "SELECT * FROM MSA WHERE data_type = 'DNA' and n_taxa < 214 and n_patterns < 3475"
+    num_points: 5000
+    num_repeats: 1
+  rgs_tb_5:
+    source: "RGS_TB"
+    query: "NUM_TAXA < 21 and OVERALL_NUM_PATTERNS < 347 and DATA_TYPE = 'DNA' and MODEL like 'GTR%' and OVERALL_NUM_ALIGNMENT_SITES > 0 and FREQ_A and RATE_AC and OVERALL_NUM_PARTITIONS = 1"
+    num_points: 5
+    num_repeats: 1
+  rgs_tb_5000:
+    source: "RGS_TB"
+    query: "NUM_TAXA < 214 and OVERALL_NUM_PATTERNS < 3475 and DATA_TYPE = 'DNA' and MODEL like 'GTR%' and OVERALL_NUM_ALIGNMENT_SITES > 0 and FREQ_A and RATE_AC and OVERALL_NUM_PARTITIONS = 1"
+    num_points: 5000
+    num_repeats: 1
+

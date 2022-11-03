@@ -1,0 +1,5 @@
+out/
+.snakemake/
+*__pycache__/
+.idea/
+*.bak
