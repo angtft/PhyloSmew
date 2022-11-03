@@ -34,7 +34,7 @@ evaluation part of the pipeline. Then, one should set the "dataset selection cri
 
 After configuring the configs and implementing a new inference tool class (see above) simply run 
 ```
-Snakemake --cores 1
+snakemake --cores 1
 ```
 with appropriately set number of cores to be used.
 
