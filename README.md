@@ -43,3 +43,10 @@ When the run is finished, one can generate some plots with
 python make_plots.py out/{output_directory}
 ```
 
+
+## Preprint
+
+D. Höhler, J. Haag,  A. M. Kozlov, A. Stamatakis, (2022). 
+**A representative Performance Assessment of Maximum Likelihood based Phylogenetic Inference Tools** 
+*bioRxiv*.
+[https://doi.org/10.1101/2022.10.31.514545](https://doi.org/10.1101/2022.10.31.514545)
