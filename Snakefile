@@ -1,4 +1,5 @@
 import collections
+import datetime
 import json
 import itertools
 import numpy as np
@@ -13,6 +14,9 @@ from io import StringIO
 import ete3
 from Bio import Phylo, SeqIO, Seq, SeqRecord
 
+import msa_parser
+import util
+
 sys.path.insert(1, os.path.join("libs", "RAxMLGroveScripts"))
 sys.path.insert(1, os.path.join("libs", "PyPythia"))
 
@@ -25,7 +29,7 @@ configfile: "config.yaml"
 
 
 BASE_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
-dsc_substitution_model = "GTR+G"   # TODO: maybe set this somewhere else
+
 current_dsc = config["data_sets"]["used_dsc"]
 dsc_source = config["data_sets"][current_dsc]["source"]
 dsc_sort_by = config["data_sets"]["sort_by"][dsc_source]
@@ -34,12 +38,21 @@ dsc_num_points = config["data_sets"][current_dsc]["num_points"]
 dsc_num_repeats = config["data_sets"][current_dsc]["num_repeats"]
 dsc_filter_file = "broken_tb_msas.txt"                               # ids from this file will be removed from analysis
 
+if "substitution_model" not in config["data_sets"][current_dsc]:
+    dsc_substitution_model = "GTR+G"
+    dsc_substitution_model_set = False
+else:
+    dsc_substitution_model = config["data_sets"][current_dsc]["substitution_model"]
+    dsc_substitution_model_set = True
+
+dsc_db = "latest_all.db" if "db" not in config["data_sets"][current_dsc] else config["data_sets"][current_dsc]["db"]
+
 raxml_ng_path = os.path.abspath(config["software"]["raxml_ng"]["command"])
 iqt2_path = os.path.abspath(config["software"]["iqtree2"]["command"])
 fasttree2_path = os.path.abspath(config["software"]["fasttree2"]["command"])
 tqdist_path = os.path.abspath(config["software"]["tqdist"]["command"])
 pythia_predictor_path = os.path.join("libs", "PyPythia", "pypythia", "predictors", "predictor_sklearn_rf_v0.0.1.pckl")
-rgs_db_path = os.path.abspath(os.path.join("libs", "RAxMLGroveScripts", "latest_all.db"))
+rgs_db_path = os.path.abspath(os.path.join("libs", "RAxMLGroveScripts", dsc_db))
 
 
 
@@ -51,7 +64,8 @@ tool_list = [
     inference_tools.RAxMLPars(raxml_ng_path, prefix="pars"),
     inference_tools.RAxMLNG(raxml_ng_path, prefix="raxml"),
     inference_tools.IQTREE2(iqt2_path, prefix="iqt2"),
-    inference_tools.FastTree2(fasttree2_path, prefix="ft2")
+    inference_tools.FastTree2(fasttree2_path, prefix="ft2"),
+    inference_tools.IQTREE2_BIONJ(iqt2_path, prefix="bionj")
 ]
 if dsc_source == "TB":
     tool_list.append(inference_tools.BigRAxMLNG(raxml_ng_path, prefix="bigraxml", check_existing="tree_best.newick"))
@@ -108,8 +122,11 @@ def select_representatives(out_file: str, source: str, query: str, sort_by: str 
             "-n", db_path
         ])
     elif source == "TB" or source == "RGS_TB":
+        db_path = "tb_all.db"
+        if os.path.isfile(rgs_db_path):
+            db_path = rgs_db_path
         command.extend([
-            "-n", "tb_dna.db",       # TODO: change once AA is supported
+            "-n", db_path,
         ])
     else:
         raise ValueError(f"unknown data source: {source}")
@@ -134,6 +151,26 @@ def select_representatives(out_file: str, source: str, query: str, sort_by: str 
     for i in range(num_splits):
         temp_range = sorted_results[int(l * i / num_splits): int(l * (i + 1) / num_splits)]
         result_dict[i] = temp_range
+
+    # in order to avoid any floating point stuff in bucket creation (leading to duplicated or empty buckets)
+    if num_splits == len(sorted_results):
+        for i in range(num_splits):
+            result_dict[i] = [sorted_results[i]]
+
+    if any([not result_dict[i] for i in result_dict]):
+        print(f"there are empty representatives buckets! aborting")
+        return
+
+    for i in range(1, num_splits-1):
+        buckets = (result_dict[i-1], result_dict[i], result_dict[i+1])
+        for j in range(len(buckets)-1):
+            b1 = buckets[j]
+            b2 = buckets[j+1]
+            for t1 in b1:
+                for t2 in b2:
+                    if t1["TREE_ID"] == t2["TREE_ID"]:
+                        print("found same tree in two representative buckets! aborting")
+                        return
 
     for key in result_dict:
         repr_set = result_dict[key]
@@ -181,11 +218,11 @@ def prepare_rgs_dataset(repr_path: str, msa_path: str, source: str):
         "-o", exp_dir,
         "--generator", "alisim"
     ]
-    if source == "RGS":
-        db_path = "latest.db"
-        if os.path.isfile(rgs_db_path):
-            db_path = rgs_db_path
 
+    if not os.path.isfile(rgs_db_path):
+        raise ValueError(f"database file {rgs_db_path} not found!")
+
+    if source == "RGS":
         generate_command.extend([
             "-n", db_path,
             "--use-bonk",
@@ -194,13 +231,13 @@ def prepare_rgs_dataset(repr_path: str, msa_path: str, source: str):
         ])
     elif source == "TB":
         generate_command.extend([
-            "-n", "tb_dna.db",          # TODO: change once AA is supported
+            "-n", rgs_db_path,          # TODO: change once AA is supported
             "--no-simulation",
             #"--use-local-db", TB_MIRROR_PATH
         ])
     elif source == "RGS_TB":
         generate_command.extend([
-            "-n", "tb_dna.db",          # TODO: change once AA is supported
+            "-n", rgs_db_path,          # TODO: change once AA is supported
             "--use-bonk",
             "--insert-matrix-gaps",
             "--avoid-empty-sequences",
@@ -210,24 +247,28 @@ def prepare_rgs_dataset(repr_path: str, msa_path: str, source: str):
         raise ValueError(f"unknown data source: {source}")
 
     # download and simulate file
-    _, _ = rgs.main(generate_command)
+    grouped_results, _ = rgs.main(generate_command)
     if source == "TB":
         tar_path = os.path.join(msa_dir, f"{repr_id}.tar.gz")
         untar_file(tar_path)
         true_msa_path = os.path.join(msa_dir, "msa.fasta")
-        shutil.copy(true_msa_path,os.path.join(msa_dir, "assembled_sequences.fasta"))
+        true_msa_seqs = msa_parser.parse_msa_somehow(true_msa_path)
+        out_msa_path = os.path.join(msa_dir, "assembled_sequences.fasta")
+
+        # we do this because RAxML-NG (which is used for the best trees in the TB database) uses reduced alignments for
+        # the tree inference, which messes up the sequence length report in its log file, which is then read and
+        # saved in the RG database. so then len(true_msa) != len(reduced_msa). the partition files created by RGS will
+        # contain the wrong per-partition sequence lengths, which seems to lead to segfaults in RAxML-NG (even for
+        # single partitioned datasets).
+        no_empty_seqs = util.remove_empty_sites(true_msa_seqs)
+        msa_parser.save_msa(no_empty_seqs, out_msa_path, msa_format="fasta")
 
     part_path = os.path.join(msa_dir, "sim_partitions.txt")
     if os.path.isfile(part_path):
-        write_raxml_part_file(part_path, dsc_substitution_model)
+        write_raxml_part_file(part_path, dsc_substitution_model, dsc_substitution_model_set)
+        write_iqt_part_file(part_path, dsc_substitution_model, dsc_substitution_model_set)
 
     # compute difficulty
-    """predictor = DifficultyPredictor(open(pythia_predictor_path, "rb"))
-    raxmlng = PythiaRAxMLNG(raxml_ng_path)
-    msa = MSA(os.path.join(msa_dir, "assembled_sequences.fasta"))
-
-    msa_features = get_all_features(raxmlng, msa, dsc_substitution_model)
-    difficulty = predictor.predict(msa_features)"""
     difficulty = pythia_predict_difficulty(os.path.join(msa_dir, "assembled_sequences.fasta"),
         pythia_predictor_path, raxml_ng_path)
 
@@ -324,7 +365,7 @@ def run_iqt2_topology_test(true_tree_path: str, tree_paths: list[str], msa_path:
 
     concat_tree_files(tree_paths, concat_path)
     names_file = os.path.join(root_path, f"{prefix}.names")
-    part_file = os.path.join(root_path, "sim_partitions.txt")
+    part_file = os.path.join(root_path, "iqt_partitions.txt")
     names = [get_tree_name_from_base_name(os.path.basename(p)) for p in tree_paths]
     with open(names_file, "w+") as file:
         for name in names:
@@ -367,16 +408,26 @@ def compute_quartet_dists(concat_trees_path: str, out_path: str):
         file.write(output)
 
 
-def write_raxml_part_file(part_path: str, substitution_model: str):
+def write_raxml_part_file(part_path: str, substitution_model: str, set_subst: int):
     msa_dir = os.path.dirname(part_path)
     part_out_path = os.path.join(msa_dir, "raxml_partitions.txt")
-    part_lines = []
-    with open(part_path) as file:
-        for line in file:
-            part_lines.append(line)
-    with open(part_out_path,"w+") as file:
-        for line in part_lines:
-            file.write(f"{substitution_model}, {line}")
+    part_info = read_sim_part_file(part_path)
+
+    with open(part_out_path, "w+") as file:
+        for _, part_model, part_name, rest in part_info:
+            tmp_model = substitution_model if set_subst else part_model
+            file.write(f"{tmp_model}, {part_name} = {rest}\n")
+
+
+def write_iqt_part_file(part_path: str, substitution_model: str, set_subst: int):
+    msa_dir = os.path.dirname(part_path)
+    part_out_path = os.path.join(msa_dir, "iqt_partitions.txt")
+    part_info = read_sim_part_file(part_path)
+
+    with open(part_out_path, "w+") as file:
+        for data_type, part_model, part_name, rest in part_info:
+            tmp_model = substitution_model if set_subst else part_model
+            file.write(f"{tmp_model}, {part_name} = {rest}\n")
 
 
 class TrueTree(inference_tools.InferenceTool):
@@ -467,8 +518,17 @@ rule run_inference:
         log = "{out_dir}/{data_set_num}/msa_{msa_num}/default/{prefix}_eval.raxml.log"
     threads: 4      # TODO: set this somewhere else
     run:
-        inf_tree = tools_dict[wildcards.prefix].run_inference(input.msa, substitution_model=dsc_substitution_model,
-            threads=threads)
+        try:
+            inf_tree = tools_dict[wildcards.prefix].run_inference(input.msa, substitution_model=dsc_substitution_model,
+                threads=threads, precomputed_tree_name="tree_best.newick")
+        except Exception as e:
+            temp_dir = os.path.dirname(input.msa)
+            with open(os.path.join(temp_dir, f"inference_error"), "a+") as file:
+                file.write("===========================\n"
+                           f"{datetime.datetime.now()}\n\n")
+                file.write(f"{e}\n"
+                           f"{traceback.print_exc()}\n")
+
         run_raxml_evaluate(input.msa, inf_tree, dsc_substitution_model, f"{wildcards.prefix}_eval")
 
 rule find_true_tree:

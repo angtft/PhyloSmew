@@ -30,7 +30,7 @@ class RAxMLPars(InferenceTool):
 
         part_path = os.path.join(msa_dir,"raxml_partitions.txt")
         if os.path.isfile(part_path):
-            model_param = os.path.basename(part_out_path)
+            model_param = os.path.basename(part_path)
 
         command = [
             self.executable_path,
@@ -76,10 +76,8 @@ class BigRAxMLNG(RAxMLNG):
     def run_inference(self, msa_path: str, substitution_model: str = "GTR+G", threads: int = 1,
                       num_pars: int = 10, num_rand: int = 10, precomputed_tree_name: str = "", **kwargs) -> str:
         msa_dir = os.path.dirname(msa_path)
-        # print(f"================= precomp: {precomputed_tree_name}")
         if precomputed_tree_name:
             precomputed_tree_path = os.path.join(msa_dir, precomputed_tree_name)
-            # print(f"================= precomp_path: {precomputed_tree_path}")
             if os.path.isfile(precomputed_tree_path):
                 print("big raxml tree already there! copying...")
                 out_path = os.path.join(msa_dir, f"{self.get_prefix()}.raxml.bestTree")
@@ -102,7 +100,31 @@ class IQTREE2(InferenceTool):
             "-nt", f"{threads}",
             "--prefix", self.get_prefix(),
         ]
-        part_file = os.path.join(msa_dir, "sim_partitions.txt")
+        part_file = os.path.join(msa_dir, "iqt_partitions.txt")
+        if part_file and os.path.isfile(part_file):
+            command.extend([
+                "-p", os.path.basename(part_file)
+            ])
+        subprocess.run(command, cwd=msa_dir)
+        return os.path.join(msa_dir, f"{self.get_prefix()}.treefile")
+
+
+class IQTREE2_BIONJ(InferenceTool):
+    def run_inference(self, msa_path: str, substitution_model: str = "GTR+G", threads: int = 1, **kwargs) -> str:
+        msa_path = str(msa_path)
+        msa_dir = os.path.dirname(msa_path)
+        msa_name = os.path.basename(msa_path)
+
+        command = [
+            self.executable_path,
+            "-s", msa_name,
+            "-m", substitution_model,
+            "-nt", f"{threads}",
+            "--prefix", self.get_prefix(),
+            "-t", "BIONJ",
+            "--tree-fix"
+        ]
+        part_file = os.path.join(msa_dir, "iqt_partitions.txt")
         if part_file and os.path.isfile(part_file):
             command.extend([
                 "-p", os.path.basename(part_file)
@@ -112,14 +134,35 @@ class IQTREE2(InferenceTool):
 
 
 class FastTree2(InferenceTool):
+    def get_model_flags(self, sub_model):
+        allowed_models = ["JC", "GTR", "JTT", "LG", "WAG"]
+        nuc_models = ["JC", "GTR"]
+        allowed_mods = ["G", "CAT"]
+        tmp = sub_model.split("+")
+        flags = ""
+
+        if tmp[0] not in allowed_models:
+            raise ValueError(f"{sub_model} possibly not supported by FastTree2")
+        else:
+            flags += f"-{tmp[0].lower()}"
+        if len(tmp) > 1:
+            if tmp[1] not in allowed_mods:
+                raise ValueError(f"{sub_model} possibly not supported by FastTree2")
+            else:
+                flags += f" -{tmp[1].lower()}"
+        if tmp[0] in nuc_models:
+            flags += f" -nt"
+
+        return flags
+
     def run_inference(self, msa_path: str, substitution_model: str = "-gtr -gamma", part_path: str = None, **kwargs) -> str:
         msa_name = os.path.basename(msa_path)
         folder_path = os.path.dirname(msa_path)
         log_path = os.path.join(folder_path, f"{self.get_prefix()}.log")
         mf_out_path = os.path.join(folder_path, f"{self.get_prefix()}.mf.tree")
         bin_out_path = os.path.join(folder_path, f"{self.get_prefix()}.bin.tree")
-        model = "-gtr -gamma" if substitution_model == "GTR+G" else substitution_model
-        command = f"{self.executable_path} {model} -nt {msa_name}"
+        model = self.get_model_flags(substitution_model)
+        command = f"{self.executable_path} {model} {msa_name}"
 
         try:
             proc = subprocess.Popen(command.split(), cwd=folder_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
