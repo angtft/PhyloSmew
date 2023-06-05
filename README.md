@@ -34,7 +34,7 @@ evaluation part of the pipeline. Then, one should set the "dataset selection cri
 
 After configuring the configs and implementing a new inference tool class (see above) simply run 
 ```
-Snakemake --cores 1
+snakemake --cores 1
 ```
 with appropriately set number of cores to be used.
 
@@ -43,3 +43,10 @@ When the run is finished, one can generate some plots with
 python make_plots.py out/{output_directory}
 ```
 
+
+## Preprint
+
+D. Höhler, J. Haag,  A. M. Kozlov, A. Stamatakis, (2022). 
+**A representative Performance Assessment of Maximum Likelihood based Phylogenetic Inference Tools** 
+*bioRxiv*.
+[https://doi.org/10.1101/2022.10.31.514545](https://doi.org/10.1101/2022.10.31.514545)
