@@ -115,3 +115,10 @@ def remove_empty_sites(seqs):
         seq.sequence = temp_sequence
     return out_seqs
 
+
+def clean_sequences(seqs):
+    out_seqs = copy.deepcopy(seqs)
+    for seq in out_seqs:
+        seq.sequence = seq.sequence.replace("*", "-")
+    return out_seqs
+

@@ -142,8 +142,8 @@ def select_representatives(out_file: str, source: str, query: str, sort_by: str 
             raise ValueError(f"unknown sorting criterion: {sort_by}")
 
     ignored_msas = {}
-    if filter_file:
-        ignored_msas = read_filter_file(filter_file)
+    #if filter_file:
+    #    ignored_msas = read_filter_file(filter_file)
     sorted_results = list(filter(lambda x: x["TREE_ID"] not in ignored_msas, sorted_results))
 
     result_dict = {}
@@ -153,6 +153,7 @@ def select_representatives(out_file: str, source: str, query: str, sort_by: str 
         result_dict[i] = temp_range
 
     # in order to avoid any floating point stuff in bucket creation (leading to duplicated or empty buckets)
+    print(num_splits, len(sorted_results))
     if num_splits == len(sorted_results):
         for i in range(num_splits):
             result_dict[i] = [sorted_results[i]]
@@ -260,7 +261,44 @@ def prepare_rgs_dataset(repr_path: str, msa_path: str, source: str):
         # saved in the RG database. so then len(true_msa) != len(reduced_msa). the partition files created by RGS will
         # contain the wrong per-partition sequence lengths, which seems to lead to segfaults in RAxML-NG (even for
         # single partitioned datasets).
-        no_empty_seqs = util.remove_empty_sites(true_msa_seqs)
+
+        cleaned_seqs = util.clean_sequences(true_msa_seqs)
+        no_empty_seqs = util.remove_empty_sites(cleaned_seqs)
+        msa_parser.save_msa(no_empty_seqs, out_msa_path, msa_format="fasta")
+
+    part_path = os.path.join(msa_dir, "sim_partitions.txt")
+    if os.path.isfile(part_path):
+        write_raxml_part_file(part_path, dsc_substitution_model, dsc_substitution_model_set)
+        write_iqt_part_file(part_path, dsc_substitution_model, dsc_substitution_model_set)
+
+    # compute difficulty
+    difficulty = pythia_predict_difficulty(os.path.join(msa_dir, "assembled_sequences.fasta"),
+        pythia_predictor_path, raxml_ng_path)
+
+    with open(os.path.join(msa_dir, "difficulty"), "w+") as file:
+        file.write(f"{difficulty}\n")
+
+
+def fast_prepare_rgs_dataset(msa_path: str, source: str):
+    msa_path = os.path.abspath(str(msa_path))
+    msa_dir = os.path.dirname(msa_path)
+    tree_id = os.path.basename(msa_dir)
+
+    if source == "TB":
+        tar_path = os.path.join(msa_dir, f"{tree_id}.tar.gz")
+        untar_file(tar_path)
+        true_msa_path = os.path.join(msa_dir, "msa.fasta")
+        true_msa_seqs = msa_parser.parse_msa_somehow(true_msa_path)
+        out_msa_path = os.path.join(msa_dir, "assembled_sequences.fasta")
+
+        # we do this because RAxML-NG (which is used for the best trees in the TB database) uses reduced alignments for
+        # the tree inference, which messes up the sequence length report in its log file, which is then read and
+        # saved in the RG database. so then len(true_msa) != len(reduced_msa). the partition files created by RGS will
+        # contain the wrong per-partition sequence lengths, which seems to lead to segfaults in RAxML-NG (even for
+        # single partitioned datasets).
+
+        cleaned_seqs = util.clean_sequences(true_msa_seqs)
+        no_empty_seqs = util.remove_empty_sites(cleaned_seqs)
         msa_parser.save_msa(no_empty_seqs, out_msa_path, msa_format="fasta")
 
     part_path = os.path.join(msa_dir, "sim_partitions.txt")
@@ -466,27 +504,37 @@ class TrueTree(inference_tools.InferenceTool):
             return os.path.join(msa_dir, "true.raxml.bestTree")
 
 
+def get_tree_ids(root_dir):
+    tree_ids = []
+    for tree_id in os.listdir(root_dir):
+        tree_dir = os.path.join(root_dir, tree_id)
+        if not os.path.isdir(tree_dir):
+            continue
+        tree_ids.append(tree_id)
+    return tree_ids
+
+
+out_dir = os.path.join("out", "new_tb_aa")
+dsc_tree_ids = get_tree_ids(out_dir)
+
 
 rule all:
     input:
-        expand("{out_dir}/{data_set_num}/msa_{msa_num}/default/rf.raxml.rfDistances",
+        expand("{out_dir}/{tree_id}/rf.raxml.rfDistances",
             out_dir=[out_dir],
-            data_set_num=list(range(dsc_num_points)),
-            msa_num=list(range(dsc_num_repeats))),
-        expand("{out_dir}/{data_set_num}/msa_{msa_num}/default/top_test.iqtree",
+            tree_id=dsc_tree_ids),
+        expand("{out_dir}/{tree_id}/top_test.iqtree",
            out_dir=[out_dir],
-           data_set_num=list(range(dsc_num_points)),
-            msa_num=list(range(dsc_num_repeats))),
-        expand("{out_dir}/{data_set_num}/msa_{msa_num}/default/quartet_dists.txt",
+           tree_id=dsc_tree_ids),
+        expand("{out_dir}/{tree_id}/quartet_dists.txt",
            out_dir=[out_dir],
-           data_set_num=list(range(dsc_num_points)),
-            msa_num=list(range(dsc_num_repeats))),
-        expand("{out_dir}/{data_set_num}/msa_{msa_num}/default/llh_diffs",
+           tree_id=dsc_tree_ids),
+        expand("{out_dir}/{tree_id}/llh_diffs",
             out_dir=[out_dir],
-            data_set_num=list(range(dsc_num_points)),
-            msa_num=list(range(dsc_num_repeats))),
+            tree_id=dsc_tree_ids),
 
-rule select_representatives:
+
+"""rule select_representatives:
     output:
         representatives = "{out_dir}/representatives_all.txt"
     run:
@@ -508,14 +556,23 @@ rule setup_dataset:
         msa = "{out_dir}/{data_set_num}/msa_{msa_num}/default/assembled_sequences.fasta",
         difficulty = "{out_dir}/{data_set_num}/msa_{msa_num}/default/difficulty"
     run:
-        prepare_rgs_dataset(input.id_file, output.msa, dsc_source)
+        prepare_rgs_dataset(input.id_file, output.msa, dsc_source)"""
+
+
+rule prepare_dataset:
+    output:
+        msa = "{out_dir}/{tree_id}/assembled_sequences.fasta",
+        difficulty="{out_dir}/{tree_id}/difficulty"
+    run:
+        fast_prepare_rgs_dataset(output.msa, dsc_source)
+
 
 rule run_inference:
     input:
-        msa = "{out_dir}/{data_set_num}/msa_{msa_num}/default/assembled_sequences.fasta"
+        msa = "{out_dir}/{tree_id}/assembled_sequences.fasta"
     output:
-        tree = "{out_dir}/{data_set_num}/msa_{msa_num}/default/{prefix}_eval.raxml.bestTree",
-        log = "{out_dir}/{data_set_num}/msa_{msa_num}/default/{prefix}_eval.raxml.log"
+        tree = "{out_dir}/{tree_id}/{prefix}_eval.raxml.bestTree",
+        log = "{out_dir}/{tree_id}/{prefix}_eval.raxml.log"
     threads: 4      # TODO: set this somewhere else
     run:
         try:
@@ -533,41 +590,41 @@ rule run_inference:
 
 rule find_true_tree:
     input:
-        trees = expand("{{out_dir}}/{{data_set_num}}/msa_{{msa_num}}/default/{prefix}_eval.raxml.bestTree", prefix=[t.get_prefix() for t in tool_list]),
-        msa = "{out_dir}/{data_set_num}/msa_{msa_num}/default/assembled_sequences.fasta"
+        trees = expand("{{out_dir}}/{{tree_id}}/{prefix}_eval.raxml.bestTree", prefix=[t.get_prefix() for t in tool_list]),
+        msa = "{out_dir}/{tree_id}/assembled_sequences.fasta"
     output:
-        true_tree = "{out_dir}/{data_set_num}/msa_{msa_num}/default/true.raxml.bestTree",
-        log = "{out_dir}/{data_set_num}/msa_{msa_num}/default/true.raxml.log"
+        true_tree = "{out_dir}/{tree_id}/true.raxml.bestTree",
+        log = "{out_dir}/{tree_id}/true.raxml.log"
     threads: 4  # TODO: set this somewhere else
     run:
         inf_tree = TrueTree("", prefix="true").run_inference(input.msa, trees=input.trees, substitution_model=dsc_substitution_model, threads=threads, dsc_source=dsc_source)
 
 rule compute_rfs:
     input:
-        trees = expand("{{out_dir}}/{{data_set_num}}/msa_{{msa_num}}/default/{prefix}_eval.raxml.bestTree", prefix=[t.get_prefix() for t in tool_list]),
-        true_tree= "{out_dir}/{data_set_num}/msa_{msa_num}/default/true.raxml.bestTree",
+        trees = expand("{{out_dir}}/{{tree_id}}/{prefix}_eval.raxml.bestTree", prefix=[t.get_prefix() for t in tool_list]),
+        true_tree= "{out_dir}/{tree_id}/true.raxml.bestTree",
     output:
-        rfs = "{out_dir}/{data_set_num}/msa_{msa_num}/default/rf.raxml.rfDistances"
+        rfs = "{out_dir}/{tree_id}/rf.raxml.rfDistances"
     run:
         compute_rfs(input.true_tree, input.trees, prefix="rf")
 
 rule compute_llh_diffs:
     input:
-        logs = expand("{{out_dir}}/{{data_set_num}}/msa_{{msa_num}}/default/{prefix}_eval.raxml.log", prefix=[t.get_prefix() for t in tool_list]),
-        true_tree_log = "{out_dir}/{data_set_num}/msa_{msa_num}/default/true.raxml.log",
+        logs = expand("{{out_dir}}/{{tree_id}}/{prefix}_eval.raxml.log", prefix=[t.get_prefix() for t in tool_list]),
+        true_tree_log = "{out_dir}/{tree_id}/true.raxml.log",
     output:
-        llh_diffs = "{out_dir}/{data_set_num}/msa_{msa_num}/default/llh_diffs"
+        llh_diffs = "{out_dir}/{tree_id}/llh_diffs"
     run:
         compute_llh_diffs(input.true_tree_log, input.logs, output.llh_diffs)
 
 rule compute_tops:
     input:
-        trees = expand("{{out_dir}}/{{data_set_num}}/msa_{{msa_num}}/default/{prefix}_eval.raxml.bestTree", prefix=[t.get_prefix() for t in tool_list]),
-        true_tree= "{out_dir}/{data_set_num}/msa_{msa_num}/default/true.raxml.bestTree",
-        msa = "{out_dir}/{data_set_num}/msa_{msa_num}/default/assembled_sequences.fasta"
+        trees = expand("{{out_dir}}/{{tree_id}}/{prefix}_eval.raxml.bestTree", prefix=[t.get_prefix() for t in tool_list]),
+        true_tree= "{out_dir}/{tree_id}/true.raxml.bestTree",
+        msa = "{out_dir}/{tree_id}/assembled_sequences.fasta"
     output:
-        concat_trees = "{out_dir}/{data_set_num}/msa_{msa_num}/default/concat.bestTrees",
-        test_results = "{out_dir}/{data_set_num}/msa_{msa_num}/default/top_test.iqtree"
+        concat_trees = "{out_dir}/{tree_id}/concat.bestTrees",
+        test_results = "{out_dir}/{tree_id}/top_test.iqtree"
     threads: 1
     run:
         run_iqt2_topology_test(input.true_tree, input.trees, input.msa, output.concat_trees, prefix="top_test", threads=threads,
@@ -575,9 +632,9 @@ rule compute_tops:
 
 rule compute_quartet_dists:
     input:
-        concat_trees = "{out_dir}/{data_set_num}/msa_{msa_num}/default/concat.bestTrees"
+        concat_trees = "{out_dir}/{tree_id}/concat.bestTrees"
     output:
-        quartet_dists = "{out_dir}/{data_set_num}/msa_{msa_num}/default/quartet_dists.txt"
+        quartet_dists = "{out_dir}/{tree_id}/quartet_dists.txt"
     run:
         compute_quartet_dists(input.concat_trees, output.quartet_dists)
 

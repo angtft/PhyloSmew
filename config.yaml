@@ -17,7 +17,7 @@ software:
 
 
 data_sets:
-  used_dsc: "tb_test_aa"             # criteria to be used for the experiments. can be defined below
+  used_dsc: "tb_aa"             # criteria to be used for the experiments. can be defined below
   sort_by:                        # attribute by which the datasets are sorted (no need to change, probably)
     RGS: "PATTERNS_BY_TAXA"
     TB: "PATTERNS_BY_TAXA"
@@ -91,3 +91,4 @@ data_sets:
     num_repeats: 1
     substitution_model: "LG"
     db: "tb_all.db"
+    no_repr: 1
