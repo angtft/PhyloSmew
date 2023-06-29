@@ -17,7 +17,7 @@ software:
 
 
 data_sets:
-  used_dsc: "tb_aa"             # criteria to be used for the experiments. can be defined below
+  used_dsc: "tb_aa_all_test"             # criteria to be used for the experiments. can be defined below
   sort_by:                        # attribute by which the datasets are sorted (no need to change, probably)
     RGS: "PATTERNS_BY_TAXA"
     TB: "PATTERNS_BY_TAXA"
@@ -66,10 +66,11 @@ data_sets:
     num_repeats: 1
   test_aa:
     source: "RGS"
-    query: "NUM_TAXA <= 40 and OVERALL_NUM_PATTERNS <= 500 and DATA_TYPE = 'AA' and RATE_STR != 'None' and FREQ_STR != 'None' and MODEL not like 'AUTO%'"
+    query: "NUM_TAXA <= 40 and OVERALL_NUM_PATTERNS <= 500 and DATA_TYPE = 'AA' and MODEL not like 'AUTO%'"
     num_points: 5
     num_repeats: 1
-    substitution_model: "LG"
+    substitution_model: "LG+G"
+    db: "latest_all_0_7.db"
   dsc_aa_0_7:
     source: "RGS"
     query: "NUM_TAXA <= 798 and OVERALL_NUM_PATTERNS <= 5432 and DATA_TYPE = 'AA' and RATE_STR != 'None' and FREQ_STR != 'None' and MODEL not like 'AUTO%'"
@@ -82,7 +83,7 @@ data_sets:
     query: "DATA_TYPE = 'AA' and NUM_TAXA < 50 and OVERALL_NUM_PATTERNS < 200"
     num_points: 10
     num_repeats: 1
-    substitution_model: "LG"
+    substitution_model: "LG+G"
     db: "tb_all.db"
   tb_aa:
     source: "TB"
@@ -92,3 +93,30 @@ data_sets:
     substitution_model: "LG"
     db: "tb_all.db"
     no_repr: 1
+  test_rgs:
+    source: "RGS_TB"
+    query: "1"
+    substitution_model: "GTR+G"
+    num_points: -1
+    num_repeats: 1
+    no_repr: 1
+  rgs_tb_5000_no_gen:
+    source: "RGS_TB"
+    query: "1"
+    substitution_model: "GTR+G"
+    num_points: -1
+    num_repeats: 1
+    no_repr: 1
+  tb_5000_test:
+    source: "TB"
+    query: "DATA_TYPE = 'DNA' and NUM_TAXA < 214 and OVERALL_NUM_PATTERNS < 3475"
+    num_points: 5000
+    num_repeats: 1
+    substitution_model: "GTR+G"
+  tb_aa_all_test:
+    source: "TB"
+    query: "DATA_TYPE = 'AA' and NUM_TAXA < 50 and OVERALL_NUM_PATTERNS < 200"
+    num_points: 10
+    num_repeats: 1
+    substitution_model: "LG+G"
+    db: "tb_all.db"

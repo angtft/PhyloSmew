@@ -173,19 +173,8 @@ def select_representatives(out_file: str, source: str, query: str, sort_by: str 
                         print("found same tree in two representative buckets! aborting")
                         return
 
-    for key in result_dict:
-        repr_set = result_dict[key]
-        temp_repr = random.choice(repr_set)
-        tree_id = temp_repr["TREE_ID"]
-
-        exp_dir = os.path.join(os.path.dirname(out_file),f"{key}")
-        create_dir_if_needed(exp_dir)
-        tree_id_file = os.path.join(exp_dir,"tree_id")
-        with open(tree_id_file, "w+") as file:
-            file.write(f"{tree_id}\n")
-
     with open(out_file,"w+") as file:
-        json.dump(result_dict,file,indent=4)
+        json.dump(result_dict, file, indent=4)
 
 
 def select_dataset(repr_file: str, target_file: str, data_set_num: int):
@@ -225,7 +214,7 @@ def prepare_rgs_dataset(repr_path: str, msa_path: str, source: str):
 
     if source == "RGS":
         generate_command.extend([
-            "-n", db_path,
+            "-n", rgs_db_path,
             "--use-bonk",
             "--insert-matrix-gaps",
             "--avoid-empty-sequences"
@@ -300,6 +289,36 @@ def fast_prepare_rgs_dataset(msa_path: str, source: str):
         cleaned_seqs = util.clean_sequences(true_msa_seqs)
         no_empty_seqs = util.remove_empty_sites(cleaned_seqs)
         msa_parser.save_msa(no_empty_seqs, out_msa_path, msa_format="fasta")
+
+    elif source == "RGS":
+        if not os.path.isfile(rgs_db_path):
+            raise ValueError(f"database file {rgs_db_path} not found!")
+
+        if not os.path.isfile(msa_path):
+            exp_dir = os.path.dirname(msa_path)
+            query = f"TREE_ID = '{tree_id}'"
+
+            #if os.path.isdir(exp_dir):
+            #    raise ValueError(f"{msa_dir} already exists!")
+
+            generate_command = [
+                "generate",
+                "-q", query,
+                "-o", exp_dir,
+                "--generator", "alisim",
+                "-n", rgs_db_path,
+                "--use-bonk",
+                "--insert-matrix-gaps",
+                "--avoid-empty-sequences"
+            ]
+
+            _, paths = rgs.main(generate_command)
+
+            # Workaround for RGS directory management for its outfiles...
+            for fn in os.listdir(paths[0]):
+                src_path = os.path.join(paths[0], fn)
+                dst_path = os.path.join(exp_dir, fn)
+                shutil.move(src_path, dst_path)
 
     part_path = os.path.join(msa_dir, "sim_partitions.txt")
     if os.path.isfile(part_path):
@@ -504,18 +523,43 @@ class TrueTree(inference_tools.InferenceTool):
             return os.path.join(msa_dir, "true.raxml.bestTree")
 
 
-def get_tree_ids(root_dir):
-    tree_ids = []
-    for tree_id in os.listdir(root_dir):
-        tree_dir = os.path.join(root_dir, tree_id)
-        if not os.path.isdir(tree_dir):
-            continue
-        tree_ids.append(tree_id)
-    return tree_ids
+def get_tree_ids(root_dir, source):
+    if "predownload" in source:
+        tree_ids = []
+        for tree_id in os.listdir(root_dir):
+            tree_dir = os.path.join(root_dir, tree_id)
+            if not os.path.isdir(tree_dir):
+                continue
+            tree_ids.append(tree_id)
+        return tree_ids
+    else:
+        repr_path = os.path.join(root_dir, "representatives.json")
+        if not os.path.isfile(repr_path):
+            select_representatives(repr_path, source, dsc_query)
+
+        sel_path = os.path.join(root_dir, "selected_datasets.json")
+        sel_dct = {}
+        if not os.path.isfile(sel_path):
+            with open(repr_path) as repr_file:
+                representatives = json.load(repr_file)
+            for data_set_num in representatives:
+                temp_repr = random.choice(representatives[data_set_num])
+                tree_id = temp_repr["TREE_ID"]
+                sel_dct[data_set_num] = tree_id
+
+            with open(sel_path, "w+") as sel_file:
+                json.dump(sel_dct, sel_file, indent=4)
+
+        with open(sel_path) as sel_file:
+            sel_dct = json.load(sel_file)
+
+    return list(sel_dct.values())
 
 
-out_dir = os.path.join("out", "new_tb_aa")
-dsc_tree_ids = get_tree_ids(out_dir)
+
+
+out_dir = os.path.join("out", current_dsc)
+dsc_tree_ids = get_tree_ids(out_dir, dsc_source)
 
 
 rule all:
@@ -576,8 +620,13 @@ rule run_inference:
     threads: 4      # TODO: set this somewhere else
     run:
         try:
-            inf_tree = tools_dict[wildcards.prefix].run_inference(input.msa, substitution_model=dsc_substitution_model,
-                threads=threads, precomputed_tree_name="tree_best.newick")
+            inf_tree = tools_dict[wildcards.prefix].get_out_tree_name(os.path.dirname(input.msa))
+            if not os.path.isfile(inf_tree):
+                inf_tree = tools_dict[wildcards.prefix].run_inference(input.msa,
+                    substitution_model=dsc_substitution_model,
+                    threads=threads, precomputed_tree_name="tree_best.newick")
+            else:
+                print(f"{inf_tree} already exists! skipping...")
         except Exception as e:
             temp_dir = os.path.dirname(input.msa)
             with open(os.path.join(temp_dir, f"inference_error"), "a+") as file:

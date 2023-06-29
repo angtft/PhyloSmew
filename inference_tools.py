@@ -20,6 +20,9 @@ class InferenceTool:
     def get_prefix(self):
         return self.prefix
 
+    def get_out_tree_name(self, msa_dir):
+        raise NotImplementedError()
+
 
 class RAxMLPars(InferenceTool):
     def run_inference(self, msa_path: str, substitution_model: str = "GTR+G", part_path: str = None,
@@ -41,6 +44,9 @@ class RAxMLPars(InferenceTool):
             "--model", model_param
         ]
         subprocess.run(command, cwd=msa_dir)
+        return self.get_out_tree_name(msa_dir)
+
+    def get_out_tree_name(self, msa_dir):
         return os.path.join(msa_dir,f"{self.get_prefix()}.raxml.startTree")
 
 
@@ -69,7 +75,10 @@ class RAxMLNG(InferenceTool):
             ])
 
         subprocess.run(command, cwd=msa_dir)
-        return os.path.join(msa_dir, f"{self.get_prefix()}.raxml.bestTree")
+        return self.get_out_tree_name(msa_dir)
+
+    def get_out_tree_name(self, msa_dir):
+        return os.path.join(msa_dir,f"{self.get_prefix()}.raxml.startTree")
 
 
 class BigRAxMLNG(RAxMLNG):
@@ -106,6 +115,9 @@ class IQTREE2(InferenceTool):
                 "-p", os.path.basename(part_file)
             ])
         subprocess.run(command, cwd=msa_dir)
+        return self.get_out_tree_name(msa_dir)
+
+    def get_out_tree_name(self, msa_dir):
         return os.path.join(msa_dir, f"{self.get_prefix()}.treefile")
 
 
@@ -130,6 +142,9 @@ class IQTREE2_BIONJ(InferenceTool):
                 "-p", os.path.basename(part_file)
             ])
         subprocess.run(command, cwd=msa_dir)
+        return self.get_out_tree_name(msa_dir)
+
+    def get_out_tree_name(self, msa_dir):
         return os.path.join(msa_dir, f"{self.get_prefix()}.treefile")
 
 
@@ -137,7 +152,7 @@ class FastTree2(InferenceTool):
     def get_model_flags(self, sub_model):
         allowed_models = ["JC", "GTR", "JTT", "LG", "WAG"]
         nuc_models = ["JC", "GTR"]
-        allowed_mods = ["G", "CAT"]
+        allowed_mods = {"G": "gamma", "CAT": "cat"}
         tmp = sub_model.split("+")
         flags = ""
 
@@ -149,7 +164,7 @@ class FastTree2(InferenceTool):
             if tmp[1] not in allowed_mods:
                 raise ValueError(f"{sub_model} possibly not supported by FastTree2")
             else:
-                flags += f" -{tmp[1].lower()}"
+                flags += f" -{allowed_mods[tmp[1]]}"
         if tmp[0] in nuc_models:
             flags += f" -nt"
 
@@ -160,9 +175,13 @@ class FastTree2(InferenceTool):
         folder_path = os.path.dirname(msa_path)
         log_path = os.path.join(folder_path, f"{self.get_prefix()}.log")
         mf_out_path = os.path.join(folder_path, f"{self.get_prefix()}.mf.tree")
-        bin_out_path = os.path.join(folder_path, f"{self.get_prefix()}.bin.tree")
+        bin_out_path = self.get_out_tree_name(folder_path)
         model = self.get_model_flags(substitution_model)
         command = f"{self.executable_path} {model} {msa_name}"
+
+        command_log_path = os.path.join(folder_path, f"{self.get_prefix()}.command")
+        with open(command_log_path, "w+") as file:
+            file.write(command)
 
         try:
             proc = subprocess.Popen(command.split(), cwd=folder_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -178,3 +197,6 @@ class FastTree2(InferenceTool):
 
         make_binary(mf_out_path, bin_out_path)
         return bin_out_path
+
+    def get_out_tree_name(self, msa_dir):
+        return os.path.join(msa_dir, f"{self.get_prefix()}.bin.tree")
