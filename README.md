@@ -11,6 +11,7 @@ The scripts use the following packages and tools:
 - matplotlib
 - NumPy
 - pandas
+- scikit-learn (1.0.2)
 - Snakemake
 - [tqDist](https://birc.au.dk/~cstorm/software/tqdist/)
 
@@ -34,13 +35,26 @@ evaluation part of the pipeline. Then, one should set the "dataset selection cri
 
 After configuring the configs and implementing a new inference tool class (see above) simply run 
 ```
-snakemake --cores 1
+snakemake --cores {cores}
 ```
 with appropriately set number of cores to be used.
 
+Alternatively, 
+```
+snakemake --cores {cores} --config used_dsc="{dsc}"
+```
+can be used to select the used the dsc without changing the config file. The dsc in the input still needs to be defined in the config though.
+
 When the run is finished, one can generate some plots with 
 ```
-python make_plots.py out/{output_directory}
+python scripty.py create_plots out/{output_directory}
+```
+The output directory should be the named after the "used_dsc" in the config file.
+
+In order to re-run the analysis, you can use the standard snakemake commands, e.g.
+```
+snakemake --delete-all-output
+snakemake --cores {cores} --config used_dsc="{dsc}"
 ```
 
 
