@@ -15,6 +15,8 @@ The scripts use the following packages and tools:
 - Snakemake
 - [tqDist](https://birc.au.dk/~cstorm/software/tqdist/)
 
+Since we are currently including an older version of [Pythia](https://github.com/tschuelia/PyPythia), the version 1.0.2 of scikit-learn is actually mandatory. We recommend using a [conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html) environment.
+
 
 ## Evaluated Tools
 
@@ -37,21 +39,20 @@ After configuring the configs and implementing a new inference tool class (see a
 ```
 snakemake --cores {cores}
 ```
-with appropriately set number of cores to be used.
+with appropriately set number of cores to be used. By default, the dsc in the config file is set to "smew_test", which can be used to quickly check if everything runs as it should.
 
 Alternatively, 
 ```
 snakemake --cores {cores} --config used_dsc="{dsc}"
 ```
-can be used to select the used the dsc without changing the config file. The dsc in the input still needs to be defined in the config though.
+can be used to select the used the dsc without changing the config file every time. The dsc still needs to be defined once in the config file though.
 
 When the run is finished, one can generate some plots with 
 ```
-python scripty.py create_plots out/{output_directory}
+python scripty.py create_plots out/{dsc}
 ```
-The output directory should be the named after the "used_dsc" in the config file.
 
-In order to re-run the analysis, you can use the standard snakemake commands, e.g.
+In order to re-run the analysis, you can use the standard snakemake commands, e.g.,
 ```
 snakemake --delete-all-output
 snakemake --cores {cores} --config used_dsc="{dsc}"

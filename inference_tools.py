@@ -15,7 +15,6 @@ from skopt.utils import use_named_args
 
 import msa_parser
 import scripts
-import branch_prediction
 import util
 from util import *
 
