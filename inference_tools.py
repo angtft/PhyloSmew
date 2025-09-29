@@ -1,21 +1,17 @@
 import joblib
+import copy
 import os
 import shutil
 import subprocess
 import time
+from typing import Optional, Dict, Any
 
 import numpy as np
 # because skopt is special:
 #  "AttributeError: module 'numpy' has no attribute 'int'.
 #  `np.int` was a deprecated alias for the builtin `int` [...]"
 np.int = int
-from skopt import Optimizer, space, gp_minimize
-from skopt.utils import use_named_args
 
-
-import msa_parser
-import scripts
-import util
 from util import *
 
 
@@ -36,6 +32,92 @@ class InferenceTool:
 
     def get_out_tree_name(self, msa_dir):
         raise NotImplementedError()
+
+
+def resolve_tools(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Resolve a tools config where each entry may 'reference' another entry
+    and may specify 'add_flags' to be appended to command strings.
+
+    Input can be either {'tools': {...}} or just {...}.
+    Returns a flat dict {tool_name: resolved_dict}, with no 'reference'/'add_flags' keys.
+    """
+    tools = raw.get("tools", raw)
+    if not isinstance(tools, dict):
+        raise TypeError("Expected a dict with key 'tools' or a tools-mapping dict.")
+
+    resolved: Dict[str, Dict[str, Any]] = {}
+    stack = set()  # for cycle detection
+
+    def _resolve(name: str) -> Dict[str, Any]:
+        if name in resolved:
+            return resolved[name]
+        if name in stack:
+            raise ValueError(f"Cyclic reference detected at '{name}'.")
+        if name not in tools:
+            raise KeyError(f"Tool '{name}' not found.")
+
+        stack.add(name)
+        current = copy.deepcopy(tools[name])
+
+        ref_name = current.pop("reference", None)
+        add_flags = current.pop("add_flags", None)
+
+        if ref_name:
+            base = copy.deepcopy(_resolve(ref_name))
+        else:
+            base = {}
+
+        # Merge: referenced base first, then overwrite with current
+        result = {**base, **current}
+
+        # Ensure command_partitioned default
+        if "command" in result and "command_partitioned" not in result:
+            result["command_partitioned"] = result["command"]
+
+        result["prefix"] = name.replace("_", "-")
+
+        # Apply add_flags (append to both command fields if they exist)
+        if add_flags:
+            if "command" in result:
+                result["command"] = f"{result['command']} {add_flags}"
+            if "command_partitioned" in result:
+                result["command_partitioned"] = f"{result['command_partitioned']} {add_flags}"
+
+        # Default inference class
+        result.setdefault("inference_class", "SimpleGeneric")
+
+        resolved[name] = result
+        stack.remove(name)
+        return result
+
+    # Resolve all tools
+    for name in tools.keys():
+        _resolve(name)
+
+    return resolved
+
+
+def prepare_tools(raw: Dict[str, Any]) -> Dict[str, InferenceTool]:
+    tools = resolve_tools(raw)
+    out_dct = {}
+
+    for tool_name in tools:
+        settings = tools[tool_name]
+        print(tool_name, settings)
+        tool = globals()[settings["inference_class"]]
+
+        out_dct[tool_name] = tool(settings["path"], settings["prefix"], settings=settings)
+
+    print(out_dct)
+    return out_dct
+
+
+
+
+
+
+
 
 
 class RAxMLPars(InferenceTool):
@@ -118,13 +200,51 @@ class IQTREE2(InferenceTool):
         msa_name = os.path.basename(msa_path)
         data_type = "DNA" if (substitution_model in ["GTR", "GTR+G", "JC", "JC+G"]) else "AA"  # TODO: fix!
 
+        used_substitution_model = substitution_model
+        if "+F" not in substitution_model:
+            used_substitution_model = f"{substitution_model}+FO"        # TODO: fix somewhere? assumption here is:
+                                                                        #       RAxML-NG uses FO as default, IQ-TREE does not!
+
         command = [
             self.executable_path,
             "-s", msa_name,
-            "-m", substitution_model,
+            "-m", used_substitution_model,
             "-nt", f"{threads}",
             "--prefix", self.get_prefix(),
             "-st", data_type
+        ]
+        part_file = os.path.join(os.path.abspath(msa_dir), "iqt_partitions.txt")
+        if part_file and os.path.isfile(part_file):
+            command.extend([
+                "-p", os.path.basename(part_file)
+            ])
+        subprocess.run(command, cwd=msa_dir)
+        return self.get_out_tree_name(msa_dir)
+
+    def get_out_tree_name(self, msa_dir):
+        return os.path.join(msa_dir, f"{self.get_prefix()}.treefile")
+
+
+class IQTREE3_Fast(InferenceTool):
+    def run_inference(self, msa_path: str, substitution_model: str = "GTR+G", threads: int = 1, **kwargs) -> str:
+        msa_path = str(msa_path)
+        msa_dir = os.path.dirname(msa_path)
+        msa_name = os.path.basename(msa_path)
+        data_type = "DNA" if (substitution_model in ["GTR", "GTR+G", "JC", "JC+G"]) else "AA"  # TODO: fix!
+
+        used_substitution_model = substitution_model
+        if "+F" not in substitution_model:
+            used_substitution_model = f"{substitution_model}+FO"        # TODO: fix somewhere? assumption here is:
+                                                                        #       RAxML-NG uses FO as default, IQ-TREE does not!
+
+        command = [
+            self.executable_path,
+            "-s", msa_name,
+            "-m", used_substitution_model,
+            "-nt", f"{threads}",
+            "--prefix", self.get_prefix(),
+            "-st", data_type,
+            "--fast"
         ]
         part_file = os.path.join(os.path.abspath(msa_dir), "iqt_partitions.txt")
         if part_file and os.path.isfile(part_file):
@@ -223,6 +343,36 @@ class FastTree2(InferenceTool):
         return os.path.join(msa_dir, f"{self.get_prefix()}.bin.tree")
 
 
+class VeryFastTree(FastTree2):
+    def run_inference(self, msa_path: str, substitution_model: str = "-gtr -gamma", threads: int = 1, part_path: str = None, **kwargs) -> str:
+        msa_name = os.path.basename(msa_path)
+        folder_path = os.path.dirname(msa_path)
+        log_path = os.path.join(folder_path, f"{self.get_prefix()}.log")
+        mf_out_path = os.path.join(folder_path, f"{self.get_prefix()}.mf.tree")
+        bin_out_path = self.get_out_tree_name(folder_path)
+        model = self.get_model_flags(substitution_model)
+        command = f"{self.executable_path} {model} {msa_name} -threads {threads}"
+
+        command_log_path = os.path.join(folder_path, f"{self.get_prefix()}.command")
+        with open(command_log_path, "w+") as file:
+            file.write(command)
+
+        try:
+            proc = subprocess.Popen(command.split(), cwd=folder_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, stderr = proc.communicate()
+        except Exception as e:
+            raise e
+
+        with open(mf_out_path, "wb+") as file:
+            file.write(stdout)
+
+        with open(log_path, "wb+") as file:
+            file.write(stderr)
+
+        make_binary(mf_out_path, bin_out_path)
+        return bin_out_path
+
+
 class RAxMLNGAdaptive(InferenceTool):
     def run_inference(self, msa_path: str, substitution_model: str = "GTR+G", threads: int = 1,
                       num_pars: int = 0, num_rand: int = 0, **kwargs) -> str:
@@ -279,4 +429,45 @@ class RAxMLNG1(InferenceTool):
 
     def get_out_tree_name(self, msa_dir):
         return os.path.join(msa_dir,f"{self.get_prefix()}.raxml.bestTree")
+
+
+class SimpleGeneric(InferenceTool):
+    def __init__(self, executable_path: str, prefix: Optional[str] = None, **kwargs):
+        # Pull off our subclass-specific kwarg so it does NOT get passed up.
+        settings: Optional[Dict[str, Any]] = kwargs.pop("settings", None)
+
+        # Let the base class initialize its bits (e.g., executable_path, prefix, seed).
+        # Forward any remaining kwargs (e.g., seed), which the parent knows how to handle.
+        super().__init__(executable_path, prefix, **kwargs)
+
+        # Store and (optionally) apply settings
+        self.settings: Dict[str, Any] = settings
+        self.settings["out_tree"] = self.settings["out_tree"].format(prefix = self.settings["prefix"])
+
+    def run_inference(self, msa_path: str, substitution_model: str = "GTR+G",
+                      part_path: str = None, **kwargs) -> str:
+
+        threads = kwargs.pop("threads", "1")
+        msa_dir = os.path.dirname(msa_path)
+
+        if not part_path:
+            command_str = self.settings["command"]
+        else:
+            command_str = self.settings["command_partitioned"]
+
+        command_str = command_str.format(
+            exe_path = os.path.abspath(self.executable_path),
+            msa_path = os.path.basename(msa_path),
+            model = substitution_model,
+            threads = threads,
+            prefix = self.prefix,
+            part_file_path = os.path.basename(part_path) if part_path else "None",
+        )
+        command = command_str.split()
+
+        subprocess.run(command, cwd=msa_dir)
+        return self.get_out_tree_name(msa_dir)
+
+    def get_out_tree_name(self, msa_dir):
+        return os.path.join(msa_dir, self.settings["out_tree"])
 

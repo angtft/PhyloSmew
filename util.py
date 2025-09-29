@@ -7,6 +7,7 @@ import os
 import random
 import subprocess
 import sys
+from typing import Optional, Dict, Any
 
 import ete3
 import numpy as np
@@ -145,6 +146,15 @@ def download_dataset(tree_id, dest_dir, db_source="tb_all.db"):
 
     cleaned_seqs = clean_sequences(true_msa_seqs)
     no_empty_seqs = remove_empty_sites(cleaned_seqs)
+
+    # We further remove duplicated sequences.
+    # Different tools have usually different philosophies on how to manage those. At least for the scenarios and tools
+    # we checked most so far (IQ-TREE, RAxML-NG, FastTree2), inclusion of duplicated sequences did not make much sense.
+    no_empty_seqs = remove_duplicated_sequences(no_empty_seqs)
+
+    # we further remove "empty" sequences (containing only undetermined characters)
+    no_empty_seqs = remove_empty_sequences(no_empty_seqs)
+
     msa_parser.save_msa(no_empty_seqs, out_msa_path, msa_format="fasta")
 
     part_path = os.path.join(msa_dir, "sim_partitions.txt")
@@ -337,18 +347,18 @@ def read_sim_part_file(part_path:str):
 
 def remove_empty_sites(seqs):
     """
-    Removes sites that contain only undetermined characters.
+    Removes sites that contain only undetermined characters "-", "?", "N".
     Args:
         seqs: MSA sequences (as returned by msa_parser.py)
 
     Returns:
-
+        list of seqs without sites containing undetermined characters only
     """
     out_seqs = copy.deepcopy(seqs)
     empty_sites = collections.defaultdict(lambda: 0)
     for seq in seqs:
         for i in range(len(seq.sequence)):
-            if seq.sequence[i] in ["-", "?"]:
+            if seq.sequence[i].lower() in ["-", "?", "n"]:
                 empty_sites[i] += 1
     for seq in out_seqs:
         temp_sequence = ""
@@ -356,6 +366,46 @@ def remove_empty_sites(seqs):
             if empty_sites[i] != len(out_seqs):
                 temp_sequence += seq.sequence[i]
         seq.sequence = temp_sequence
+    return out_seqs
+
+
+def remove_empty_sequences(seqs):
+    """
+    Removes sequences that contain only undetermined characters "-", "?", "N".
+    Args:
+        seqs: MSA sequences (as returned by msa_parser.py)
+
+    Returns:
+        list of seqs without seqs containing undetermined characters only
+    """
+    out_seq = []
+    for seq in seqs:
+        num_undet = 0
+        for char in seq.sequence:
+            if char.lower() in ["-", "?", "n"]:
+                num_undet += 1
+        if num_undet < len(seq.sequence):
+            out_seq.append(seq)
+    return out_seq
+
+
+def remove_duplicated_sequences(seqs):
+    """
+    Removes duplicated sequences from the MSA.
+    Args:
+        seqs: MSA sequences (as returned by msa_parser.py)
+
+    Returns:
+        seqs without duplicated sequences
+    """
+    out_seqs = []
+    seq_dct = {}
+
+    for seq in seqs:
+        if seq.sequence not in seq_dct:
+            seq_dct[seq.sequence] = 1
+            out_seqs.append(seq)
+
     return out_seqs
 
 

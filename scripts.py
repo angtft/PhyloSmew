@@ -13,13 +13,14 @@ import re
 import shutil
 import statistics
 import subprocess
+import traceback
 import sys
 import yaml
 
-from Bio import Phylo, SeqIO, Seq, SeqRecord
+from Bio import SeqIO
+import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-import seaborn as sns
 
 import msa_parser
 
@@ -104,17 +105,23 @@ def read_json(path):
 
 
 def collect_run_times(root_dir, file_names):
-    #file_names = [
-    #    "raxml.raxml.log", "iqt2.log", "ft2.log", "pars.raxml.log", "bionj.log", "bigraxml.raxml.log", "parsconst1.raxml.log", "bpc1.raxml.log", "raxad.raxml.log", "bpc1f.raxml.log", "raxml1.raxml.log"
-    #]
+    # TODO: do this file name correction somewhere/somehow else
+    prefixes = [x.split(".")[0].replace("_eval", "") for x in file_names]
+    file_names = [f"{p}.runtime" for p in prefixes]
+
+    """ 
+    # TODO: remove. this was used for internal tests
+    file_names = [
+        "raxml1.raxml.log", "raxml2-default.raxml.log", "raxml2-fast.raxml.log", "iqtree3.log", "iqtree3-fast.log", "fasttree2.log", "bigraxml.raxml.log"
+    ]
+    """
+
     value_dct = {}
     for fn in file_names:
         tool_name = fn.split(".")[0]
         log_path = os.path.join(root_dir, fn)
-        if not os.path.isfile(log_path) and fn == "raxml.raxml.log":
-            log_path = os.path.join(root_dir, "raxml_eval.raxml.log")
 
-        time = -1
+        time = 1
 
         if os.path.isfile(log_path):
             with open(log_path) as file:
@@ -123,6 +130,10 @@ def collect_run_times(root_dir, file_names):
                         print("EVAL in TIME MEASURE!!!")
 
                     line = line.strip()
+                    if fn.endswith("runtime"):
+                        time = float(line)
+                        break
+
                     if line.startswith("Elapsed time: "):
                         time = float(line.split()[2])
                     if line.startswith("Total wall-clock time used: "):
@@ -134,8 +145,8 @@ def collect_run_times(root_dir, file_names):
                 print(f"{log_path} not found for time collection!")
         value_dct[f"abs_time_{tool_name}"] = time
 
-    ref_key = "abs_time_raxml"
-    ref_val = 1     #value_dct[ref_key] # TODO: fix!
+    ref_key = list(value_dct.keys())[0]
+    ref_val = value_dct[ref_key] # TODO: fix!
     relative_times = {}
 
     for fn in file_names:
@@ -143,24 +154,6 @@ def collect_run_times(root_dir, file_names):
         relative_times[f"rel_time_{tool_name}"] = value_dct[f"abs_time_{tool_name}"] / ref_val
 
     return value_dct, relative_times
-
-
-def rename_old_tb_true_tree(root_dir):
-    for exp_id in os.listdir(root_dir):
-        exp_dir = os.path.join(root_dir, exp_id)
-        if not os.path.isdir(exp_dir):
-            continue
-        for msa_id in os.listdir(exp_dir):
-            msa_dir = os.path.join(exp_dir, msa_id, "default")
-
-            if not os.path.isdir(msa_dir):
-                continue
-
-            for fn in os.listdir(msa_dir):
-                if fn.startswith("true.raxml"):
-                    old_path = os.path.join(msa_dir, fn)
-                    new_path = os.path.join(msa_dir, fn.replace("true.", "bigraxml_eval."))
-                    os.rename(old_path, new_path)
 
 
 def guess_data_type_from_model(model):
@@ -285,35 +278,27 @@ def force_write_iqt_part_file(part_path, model):
             file.write(f"{dt}, {part_name} = {rest}\n")
 
 
-def reset_all_rule(root_dir, exp_ids):
+def reset_all_rule(root_dir, target_ids=[]):
     all_rule_fn = [
         "rf.raxml.rfDistances",
-        "top_test.iqtree",
-        "quartet_dists.txt",
-        "concat.bestTrees",
         "llh_diffs",
-        # "bionj_eval.raxml.bestTree",
-        # "pars_eval.raxml.bestTree"
+        "ntd_dists.txt",
+        "concat_slh.catpv",
+        "cleaned_dir",
+        "quartet_dists.txt",
     ]
 
-    # for exp_id in os.listdir(root_dir): # TODO: this one is kinda dangerous...
-    for exp_id in exp_ids.split(","):
-        exp_dir = os.path.join(root_dir, exp_id)
-        if not os.path.isdir(exp_dir):
+    exp_ids = list(os.listdir(root_dir)) if not target_ids else target_ids.split(",")
+
+    for exp_id in exp_ids:
+        msa_dir = os.path.join(root_dir, exp_id)
+        if not os.path.isdir(msa_dir):
             continue
 
-        for msa_id in os.listdir(exp_dir):
-            msa_dir = os.path.join(exp_dir, msa_id, "default")
-
-            for fn in all_rule_fn:
-                del_path = os.path.join(msa_dir, fn)
-                if os.path.isfile(del_path):
-                    os.remove(del_path)
-
-        # cover new directory structure
         for fn in all_rule_fn:
-            del_path = os.path.join(exp_dir, fn)
+            del_path = os.path.join(msa_dir, fn)
             if os.path.isfile(del_path):
+                print(f"deleting {del_path}")
                 os.remove(del_path)
 
 
@@ -353,131 +338,6 @@ def download_datasets(root_dir, query, db_name, ref_dir=""):
         rgs.main(temp_command)
 
 
-def download_datasets_from_config(root_dir, ref_dir="", max_num=0):
-    with open("config.yaml") as file:
-        config_dct = yaml.safe_load(file)
-
-    dsc_name = config_dct["data_sets"]["used_dsc"]
-    query = config_dct["data_sets"][dsc_name]["query"]
-    db_name = config_dct["data_sets"][dsc_name]["db"]
-
-    if db_name != "tb_all.db":
-        raise ValueError(f"only TB database supported right now!")
-
-    ref_ids = {}
-    if os.path.isdir(ref_dir):
-        for ref_id in os.listdir(ref_dir):
-            ref_ids[ref_id] = os.path.join(ref_dir, ref_id)
-
-    command_find = [
-        "find",
-        "-q", query,
-        "-n", db_name,
-        "-o", root_dir,
-        "--list"
-    ]
-
-    grouped_results, _ = rgs.main(command_find)
-    if not max_num:
-        max_num = len(grouped_results)
-    else:
-        max_num = int(max_num)
-
-    key_list = list(grouped_results.keys())
-    random.shuffle(key_list)
-    for counter, tree_id in enumerate(key_list[:max_num]):
-        print(f"{counter}: {tree_id}")
-        if tree_id in ref_ids:
-            print(f"{tree_id} already available!")
-            continue
-
-        new_tree_dir = os.path.join(root_dir, tree_id)
-        if os.path.isdir(new_tree_dir):
-            print(f"{new_tree_dir} already exists!")
-            continue
-
-        temp_query = f"TREE_ID = '{tree_id}'"
-        temp_command = [
-            "generate",
-            "-q", temp_query,
-            "-n", db_name,
-            "--generator", "alisim",
-            "--no-simulation",
-            "-o", root_dir
-        ]
-        rgs.main(temp_command)
-
-    repr_path = os.path.join(root_dir, "representatives.json")
-    if os.path.isfile(repr_path):
-        raise ValueError(f"{repr_path} already exists!")
-
-    repr_dct = {}
-    for i, key in enumerate(grouped_results):
-        repr_dct[i] = [grouped_results[key][0]]
-    with open(repr_path, "w+") as file:
-        json.dump(repr_dct, file, indent=4)
-
-    sel_path = os.path.join(root_dir, "selected_datasets.json")
-    sel_dct = {}
-    if not os.path.isfile(sel_path):
-        with open(repr_path) as repr_file:
-            representatives = json.load(repr_file)
-        for data_set_num in representatives:
-            temp_repr = random.choice(representatives[data_set_num])
-            tree_id = temp_repr["TREE_ID"]
-            sel_dct[data_set_num] = tree_id
-
-        with open(sel_path, "w+") as sel_file:
-            json.dump(sel_dct, sel_file, indent=4)
-    else:
-        raise ValueError(f"{sel_path} already exists!")
-
-
-def create_repr_from_config(root_dir):
-    with open("config.yaml") as file:
-        config_dct = yaml.safe_load(file)
-
-    dsc_name = config_dct["data_sets"]["used_dsc"]
-    query = config_dct["data_sets"][dsc_name]["query"]
-    db_name = config_dct["data_sets"][dsc_name]["db"]
-
-    print(query)
-
-    command_find = [
-        "find",
-        "-q", query,
-        "-n", db_name,
-        "-o", root_dir,
-        "--list"
-    ]
-    grouped_results, _ = rgs.main(command_find)
-
-    repr_path = os.path.join(root_dir, "representatives.json")
-    if os.path.isfile(repr_path):
-        raise ValueError(f"{repr_path} already exists!")
-
-    repr_dct = {}
-    for i, key in enumerate(grouped_results):
-        repr_dct[i] = [grouped_results[key][0]]
-    with open(repr_path, "w+") as file:
-        json.dump(repr_dct, file, indent=4)
-
-    sel_path = os.path.join(root_dir, "selected_datasets.json")
-    sel_dct = {}
-    if not os.path.isfile(sel_path):
-        with open(repr_path) as repr_file:
-            representatives = json.load(repr_file)
-        for data_set_num in representatives:
-            temp_repr = random.choice(representatives[data_set_num])
-            tree_id = temp_repr["TREE_ID"]
-            sel_dct[data_set_num] = tree_id
-
-        with open(sel_path, "w+") as sel_file:
-            json.dump(sel_dct, sel_file, indent=4)
-    else:
-        raise ValueError(f"{sel_path} already exists!")
-
-
 def create_repr_files(src_dir):
     sel_dct = {}
     repr_dct = {}
@@ -486,25 +346,37 @@ def create_repr_files(src_dir):
     for exp_id in os.listdir(src_dir):
         src_exp_dir = os.path.join(src_dir, exp_id)
         tree_dct_path = os.path.join(src_exp_dir, "tree_dict.json")
-        if not os.path.isfile(tree_dct_path):
-            continue
+        if os.path.isfile(tree_dct_path):
+            try:
+                with open(tree_dct_path) as file:
+                    tree_dct = json.load(file)
+            except Exception as e:
+                print(f"error in {exp_id}:\n"
+                      f"{e}")
+                continue
+
+            tree_id = tree_dct[0]["TREE_ID"]
+
+            sel_dct[counter] = tree_id
+            repr_dct[counter] = [tree_dct[0]]
+        else:
+            msa_path = os.path.join(src_exp_dir, "assembled_sequences.fasta")
+            if not os.path.isfile(msa_path):
+                continue
+            tree_id = exp_id
+
+            sel_dct[counter] = tree_id
+            # using dummy dct
+            repr_dct[counter] = [
+                {
+                    "TREE_ID": f"{tree_id}"
+                }
+            ]
 
         if counter % 100 == 0:
             print(counter)
         counter += 1
 
-        try:
-            with open(tree_dct_path) as file:
-                tree_dct = json.load(file)
-        except Exception as e:
-            print(f"error in {exp_id}:\n"
-                  f"{e}")
-            continue
-
-        tree_id = tree_dct[0]["TREE_ID"]
-
-        sel_dct[counter] = tree_id
-        repr_dct[counter] = [tree_dct[0]]
 
     dst_dir = src_dir
     with open(os.path.join(dst_dir, "representatives.json"), "w+") as file:
@@ -754,10 +626,75 @@ def get_msa_params_from_raxml_as_dct(raxml_log_path):
     return dct
 
 
-def make_csv_new_dirs(root_dir, out_path="", no_time=False):
-    ds_name = os.path.basename(root_dir)
-    if not ds_name:
-        ds_name = os.path.basename(os.path.dirname(root_dir))
+def make_csv(root_dir, out_path="", no_time=False):
+    """
+    Build a CSV aggregating results across *all thread-specific out_dirs*.
+
+    Behavior:
+      - If `root_dir` points to one of the thread directories (e.g., ".../mydsc_t8"),
+        we discover all sibling directories matching the same prefix with the `_t<number>`
+        suffix and aggregate across them.
+      - If `root_dir` is a parent containing the thread directories as children, we
+        aggregate across those children.
+      - If neither pattern matches, we fall back to the original behavior and only
+        read `root_dir`.
+    """
+
+    def _discover_thread_dirs(base_dir):
+        base_dir = os.path.abspath(base_dir.rstrip(os.sep))
+        parent = os.path.dirname(base_dir)
+        base_name = os.path.basename(base_dir)
+
+        # Case 1: root_dir itself is one thread dir "..._tN"
+        m = re.match(r"(.+)_t(\d+)$", base_name)
+        if m:
+            prefix = m.group(1)
+            found = []
+            try:
+                for name in os.listdir(parent):
+                    m2 = re.match(rf"^{re.escape(prefix)}_t(\d+)$", name)
+                    if m2:
+                        tnum = int(m2.group(1))
+                        full = os.path.join(parent, name)
+                        if os.path.isdir(full):
+                            found.append((full, tnum))
+            except FileNotFoundError:
+                pass
+            if found:
+                found.sort(key=lambda x: x[1])
+                return found, prefix
+
+        # Case 2: root_dir contains the thread dirs as children
+        groups = {}
+        try:
+            for name in os.listdir(base_dir):
+                m3 = re.match(r"(.+)_t(\d+)$", name)
+                full = os.path.join(base_dir, name)
+                if m3 and os.path.isdir(full):
+                    pref, tnum = m3.group(1), int(m3.group(2))
+                    groups.setdefault(pref, []).append((full, tnum))
+        except FileNotFoundError:
+            pass
+
+        if len(groups) == 1:
+            pref = next(iter(groups))
+            lst = groups[pref]
+            lst.sort(key=lambda x: x[1])
+            return lst, pref
+        elif len(groups) > 1:
+            # Multiple prefixes found; flatten but prefer the largest group (common case: many threads of one prefix)
+            pref = max(groups.items(), key=lambda kv: len(kv[1]))[0]
+            lst = groups[pref]
+            lst.sort(key=lambda x: x[1])
+            return lst, pref
+
+        # Fallback: just treat base_dir as a single directory with unknown thread count
+        return [(base_dir, None)], os.path.basename(base_dir)
+
+    thread_dirs, common_prefix = _discover_thread_dirs(root_dir)
+
+    # Derive dataset name for default output when out_path is empty
+    ds_name = common_prefix if common_prefix else os.path.basename(root_dir) or os.path.basename(os.path.dirname(root_dir))
 
     df = pd.DataFrame()
     counter = 0
@@ -770,119 +707,128 @@ def make_csv_new_dirs(root_dir, out_path="", no_time=False):
 
     exclude_dirs = []
 
-    for exp_id in os.listdir(root_dir):
-        if exp_id in exclude_dirs:
-            print(f"excluding {exp_id}")
+    # Iterate over each thread-specific directory
+    for thread_dir, thread_num in thread_dirs:
+        if not os.path.isdir(thread_dir):
             continue
 
-        tree_dir = os.path.join(root_dir, exp_id)
-        if not os.path.isdir(tree_dir):
-            continue
-        order_path = os.path.join(tree_dir, "top_test.names")
-        rf_order_path = os.path.join(tree_dir, "rf.raxml.log")
-        diff_path = os.path.join(tree_dir, "difficulty")
-        llh_path = os.path.join(tree_dir, "llh_diffs")
-        rfs_path = os.path.join(tree_dir, "rf.raxml.rfDistances")
-        log_path = os.path.join(tree_dir, "true.raxml.log")
-        ntd_path = os.path.join(tree_dir, "ntd_dists.txt")
-        consel_path = os.path.join(tree_dir, "concat_slh.catpv")
-        consel_tree_path = os.path.join(tree_dir, "concat_slh.siteLH")
+        for exp_id in os.listdir(thread_dir):
+            if exp_id in exclude_dirs:
+                print(f"excluding {exp_id}")
+                continue
 
-        tree_dict_path = os.path.join(tree_dir, "tree_dict.json")
-        if not os.path.isfile(tree_dict_path):
-            print(f"no tree dict! {exp_id}")
-            continue
+            tree_dir = os.path.join(thread_dir, exp_id)
+            if not os.path.isdir(tree_dir):
+                continue
 
-        num_part = 1
-        try:
-            with open(tree_dict_path) as file:
-                tree_dct = json.load(file)
-            num_part = tree_dct[0]["OVERALL_NUM_PARTITIONS"]
-        except Exception as e:
-            print(f"error with {tree_dir}")
-            print(e)
+            order_path = os.path.join(tree_dir, "top_test.names")
+            rf_order_path = os.path.join(tree_dir, "rf.raxml.log")
+            diff_path = os.path.join(tree_dir, "difficulty")
+            llh_path = os.path.join(tree_dir, "llh_diffs")
+            rfs_path = os.path.join(tree_dir, "rf.raxml.rfDistances")
+            log_path = os.path.join(tree_dir, "true.raxml.log")
+            ntd_path = os.path.join(tree_dir, "ntd_dists.txt")
+            consel_path = os.path.join(tree_dir, "concat_slh.catpv")
+            consel_tree_path = os.path.join(tree_dir, "concat_slh.siteLH")
 
-        if num_part > 1 and not os.path.isfile(consel_path):
-            print(f"part > 1 and no consel!")
+            tree_dict_path = os.path.join(tree_dir, "tree_dict.json")
+            if not os.path.isfile(tree_dict_path):
+                print(f"no tree dict! {exp_id}")
+                continue
 
-        exp_incomp = False
-        for p in [order_path, diff_path, llh_path, rfs_path, log_path, ntd_path, consel_path]:
-            if not os.path.isfile(p):
-                print(f"{exp_id} is incomplete! {p} missing")
-                exp_incomp = True
-        if exp_incomp:
-            continue
+            num_part = 1
+            try:
+                with open(tree_dict_path) as file:
+                    tree_dct = json.load(file)
+                num_part = tree_dct[0]["OVERALL_NUM_PARTITIONS"]
+            except Exception as e:
+                print(f"error with {tree_dir}")
+                print(e)
 
-        if any(not os.path.isfile(p) for p in [order_path, diff_path, llh_path, rfs_path, log_path, ntd_path, consel_path, consel_tree_path]):
-            print(f"{exp_id} is incomplete!")
-            continue
+            if num_part > 1 and not os.path.isfile(consel_path):
+                print(f"{exp_id}: part > 1 and no consel!")
 
-        names = read_order_file(order_path)
-        rf_names = read_rf_order_file(rf_order_path)
-        consel_names = read_consel_name_file(consel_tree_path)
+            exp_incomp = False
+            for p in [order_path, diff_path, llh_path, rfs_path, log_path, ntd_path, consel_path]:
+                if not os.path.isfile(p):
+                    print(f"{exp_id} is incomplete! {p} missing")
+                    exp_incomp = True
+            if exp_incomp:
+                continue
 
-        difficulty = read_diff_file(diff_path)
-        llhs, txt_llhs = parse_llh_file(llh_path)
-        rfs = read_rf_file(rfs_path, rf_names)
+            if any(not os.path.isfile(p) for p in [order_path, diff_path, llh_path, rfs_path, log_path, ntd_path, consel_path, consel_tree_path]):
+                print(f"{exp_id} is incomplete!")
+                continue
 
-        #sl, pn, gp = get_msa_params_from_raxml(log_path)
-        msa_param_dct = get_msa_params_from_raxml_as_dct(log_path)
-        sl = msa_param_dct["num_sites"]
-        pn = msa_param_dct["num_patterns"]
-        gp = msa_param_dct["gaps"]
+            names = read_order_file(order_path)
+            rf_names = read_rf_order_file(rf_order_path)
+            consel_names = read_consel_name_file(consel_tree_path)
 
-        cleaned_names = [os.path.basename(n) for n in names]
-        if not no_time:
-            abs_times, rel_times = collect_run_times(tree_dir, cleaned_names)
-        else:
-            abs_times, rel_times = ({"no_abs_time": "true"}, {"no_rel_time": "true"})
-        ntds = read_ntd_file(ntd_path, cleaned_names)
-        consels = read_consel_test_results(consel_path, consel_names)
+            difficulty = read_diff_file(diff_path)
+            llhs, txt_llhs = parse_llh_file(llh_path)
+            rfs = read_rf_file(rfs_path, rf_names)
 
-        sl_ratios.append(pn/sl)
-        if difficulty < 0.2:
-            sl_ratios_easy.append(pn / sl)
+            msa_param_dct = get_msa_params_from_raxml_as_dct(log_path)
+            sl = msa_param_dct["num_sites"]
+            pn = msa_param_dct["num_patterns"]
+            gp = msa_param_dct["gaps"]
 
-        if not consels["consel_true"] and difficulty < 0.2:
-            already_added = 0
-            not_in_counter += 1
-            sl_ratios_easy_fu.append(pn/sl)
-            for key in txt_llhs:
-                if key == "llh_true":
-                    continue
-                if txt_llhs["llh_true"] == txt_llhs[key]:
-                    print(tree_dir, key, sl, pn, pn/sl)
-                    tool_counters[key] += 1
-                    already_added += 1
-            if already_added == 0:
-                print(f"match not found")
-            if already_added > 1:
-                print("multiple highest llhs!")
+            cleaned_names = [os.path.basename(n) for n in names]
+            if not no_time:
+                abs_times, rel_times = collect_run_times(tree_dir, cleaned_names)
+            else:
+                abs_times, rel_times = ({"no_abs_time": "true"}, {"no_rel_time": "true"})
+            ntds = read_ntd_file(ntd_path, cleaned_names)
+            consels = read_consel_test_results(consel_path, consel_names)
 
-        temp_dct = {
-            "exp_id": exp_id,
-            "difficulty": difficulty,
-            "seq_len": sl,
-            "num_patterns": pn,
-            "num_taxa": msa_param_dct["num_taxa"],
-            "gaps": gp,
-            **llhs,
-            **rfs,
-            **ntds,
-            **consels,
-            **abs_times,
-            **rel_times
-        }
-        temp_dct = {key: [value] if not isinstance(value, (list, tuple)) else value for key, value in temp_dct.items()}
-        df = pd.concat([df, pd.DataFrame(temp_dct)])
+            sl_ratios.append(pn/sl)
+            if difficulty < 0.2:
+                sl_ratios_easy.append(pn / sl)
 
-        if counter % 100 == 0:
-            print(f"{counter}")
-        counter += 1
+            if not consels["consel_true"] and difficulty < 0.2:
+                already_added = 0
+                not_in_counter += 1
+                sl_ratios_easy_fu.append(pn/sl)
+                for key in txt_llhs:
+                    if key == "llh_true":
+                        continue
+                    if txt_llhs["llh_true"] == txt_llhs[key]:
+                        print(tree_dir, key, sl, pn, pn/sl)
+                        tool_counters[key] += 1
+                        already_added += 1
+                if already_added == 0:
+                    print(f"match not found")
+                if already_added > 1:
+                    print("multiple highest llhs!")
 
+            temp_dct = {
+                "exp_id": exp_id,
+                "thread_num": thread_num,  # NEW
+                "difficulty": difficulty,
+                "seq_len": sl,
+                "num_patterns": pn,
+                "num_taxa": msa_param_dct["num_taxa"],
+                "gaps": gp,
+                **llhs,
+                **rfs,
+                **ntds,
+                **consels,
+                **abs_times,
+                **rel_times
+            }
+            temp_dct = {key: [value] if not isinstance(value, (list, tuple)) else value for key, value in temp_dct.items()}
+            df = pd.concat([df, pd.DataFrame(temp_dct)])
+
+            if counter % 100 == 0:
+                print(f"{counter}")
+            counter += 1
+
+    # Write CSV
     if not out_path:
+        os.makedirs(os.path.dirname(f"{ds_name}_stats.csv") or ".", exist_ok=True)
         df.to_csv(f"{ds_name}_stats.csv", index=False)
     else:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
         df.to_csv(out_path, index=False)
 
 
@@ -1294,6 +1240,225 @@ def plot_consel(csv_path):
     violin_plots(df, buckets, present_names_true, prefix="consel", x_key="consel", out_dir=os.path.dirname(csv_path))
 
 
+def clean_msas_in_root(root_dir):
+    for tree_id in os.listdir(root_dir):
+        msa_dir = os.path.join(root_dir, tree_id)
+        if not os.path.isdir(msa_dir):
+            continue
+
+        print(f"cleaning {tree_id}")
+        true_msa_path = os.path.join(msa_dir, "assembled_sequences.fasta")
+        true_msa_seqs = msa_parser.parse_msa_somehow(true_msa_path)
+        out_msa_path = os.path.join(msa_dir, "assembled_sequences.fasta")
+
+        # we do this because RAxML-NG (which is used for the best trees in the TB database) uses reduced alignments for
+        # the tree inference, which messes up the sequence length report in its log file, which is then read and
+        # saved in the RG database. so then len(true_msa) != len(reduced_msa). the partition files created by RGS will
+        # contain the wrong per-partition sequence lengths, which seems to lead to segfaults in RAxML-NG (even for
+        # single partitioned datasets).
+
+        cleaned_seqs = clean_sequences(true_msa_seqs)
+        no_empty_seqs = remove_empty_sites(cleaned_seqs)
+
+        # We further remove duplicated sequences.
+        # Different tools have usually different philosophies on how to manage those. At least for the scenarios and tools
+        # we checked most so far (IQ-TREE, RAxML-NG, FastTree2), inclusion of duplicated sequences did not make much sense.
+        no_empty_seqs = remove_duplicated_sequences(no_empty_seqs)
+
+        # we further remove "empty" sequences (containing only undetermined characters)
+        no_empty_seqs = remove_empty_sequences(no_empty_seqs)
+
+        msa_parser.save_msa(no_empty_seqs, out_msa_path, msa_format="fasta")
+
+
+def clean_msa(in_path, out_path):
+    true_msa_seqs = msa_parser.parse_msa_somehow(in_path)
+
+    cleaned_seqs = clean_sequences(true_msa_seqs)
+    no_empty_seqs = remove_empty_sites(cleaned_seqs)
+    no_empty_seqs = remove_duplicated_sequences(no_empty_seqs)
+    no_empty_seqs = remove_empty_sequences(no_empty_seqs)
+
+    msa_parser.save_msa(no_empty_seqs, out_path, msa_format="fasta")
+
+
+def _prepare_datasets_from_source(source_dir, clean_msas="1"):
+    """
+    Copies MSAs and partition files assuming either 1., 2., 3. MSA directory structure.
+
+    Partition files need to be in format
+        {data_type}, {model}, {part_name} = n1-n2
+    e.g.,
+        DNA, GTR+G, partition_0 = 1-280
+        DNA, GTR+G, partition_1 = 281-439
+    TODO: Currently, the model of the partition file will be overwritten in any case by the substitution_model set in
+          the config.yaml.
+
+    1. option:
+     - source_dir
+        - {msa_id1}.[fa|fasta|phylip|phylips|phy|p]
+        - {msa_id1}.part                              # if MSA msa_id1 is partitioned
+        - {msa_id2}.[fa|fasta|phylip|phylips|phy|p]
+        - {msa_id3}.[fa|fasta|phylip|phylips|phy|p]
+        ...
+
+     the output directories here will be
+        ./out/{basename of source_dir}/{msa_name1}/assembled_sequences.fasta
+        ./out/{basename of source_dir}/{msa_name1}/partitions.txt
+        ...
+
+    2. option:
+     - source_dir
+        - {msa_id1}
+            - {sub_id1}.[fa|fasta|phylip|phylips|phy|p]
+            - {sub_id1}.part
+            - {sub_id2}.[fa|fasta|phylip|phylips|phy|p]
+            ...
+        - {msa_id2}
+            - {sub_id1}.[fa|fasta|phylip|phylips|phy|p]
+        ...
+
+        the output directories here will be
+        ./out/{basename of source_dir}/{msa_name1}_{sub_id1}/assembled_sequences.fasta
+        ...
+
+    3. option (PhyloSmew structure):
+     - source_dir
+        - {msa_id1}
+            - assembled_sequences.fasta
+            - partitions.txt
+        ...
+
+    Args:
+        source_dir: directory containing MSAs
+
+    Returns:
+
+    """
+
+    # Resolve base name used for the output root
+    base_name = os.path.basename(os.path.normpath(source_dir))
+    if not base_name:
+        base_name = os.path.basename(os.path.dirname(os.path.normpath(source_dir)))
+
+    out_root = os.path.join("out", base_name)
+    create_dir_if_needed(out_root)
+
+    # Accepted sequence file extensions (case-insensitive)
+    seq_exts = {"fa", "fasta", "phylip", "phylips", "phy", "p"}
+    exlude_suffixes = ["raxml.reduced.phy"]
+
+    # Helper: write MSA to destination, with/without cleaning
+    def _write_msa(in_path, out_path, do_clean):
+        if do_clean:
+            # Clean + write
+            clean_msa(in_path, out_path)
+        else:
+            # Normalize/write without cleaning (mirror clean_msa IO, but skip filters)
+            seqs = msa_parser.parse_msa_somehow(in_path)
+            msa_parser.save_msa(seqs, out_path, msa_format="fasta")
+
+    # Helper: process one MSA + optional partition file into a named dataset directory
+    def _emit_dataset(msa_path, dataset_name, part_path=None):
+        dst_dir = os.path.join(out_root, dataset_name)
+        create_dir_if_needed(dst_dir)
+
+        dst_msa = os.path.join(dst_dir, "assembled_sequences.fasta")
+        if os.path.isfile(dst_msa):
+            print(f"{dst_msa} already exists, skipping MSA write.")
+        else:
+            _write_msa(msa_path, dst_msa, str(clean_msas).strip() == "1")
+
+        # Copy/rename partition description (if any) to partitions.txt
+        if part_path and os.path.isfile(part_path):
+            dst_part = os.path.join(dst_dir, "partitions.txt")
+            if not os.path.isfile(dst_part):
+                try:
+                    shutil.copy2(part_path, dst_part)  # preserves file metadata where possible
+                except Exception:
+                    # Fallback: plain copy if copy2 fails for some FS edge-case
+                    shutil.copy(part_path, dst_part)
+
+    # --- Detect layout (3) first: PhyloSmew structure with assembled_sequences.fasta inside subdirs
+    found_any = False
+    for item in os.listdir(source_dir):
+        subdir = os.path.join(source_dir, item)
+        if not os.path.isdir(subdir):
+            continue
+        fasta_in = os.path.join(subdir, "assembled_sequences.fasta")
+        if os.path.isfile(fasta_in):
+            found_any = True
+            # Prefer existing partitions.txt, otherwise accept sim_partitions.txt, lastly <dir>.part if it exists
+            part_in = None
+            for cand in ("partitions.txt", "sim_partitions.txt", f"{item}.part"):
+                cand_path = os.path.join(subdir, cand)
+                if os.path.isfile(cand_path):
+                    part_in = cand_path
+                    break
+            _emit_dataset(fasta_in, item, part_in)
+    if found_any:
+        return out_root
+
+    # --- Layout (1): top-level files like {msa_id}.{fa|fasta|phylip|phylips|phy|p} (+ optional {msa_id}.part)
+    for fn in os.listdir(source_dir):
+        src = os.path.join(source_dir, fn)
+        if not os.path.isfile(src):
+            continue
+        stem, ext = os.path.splitext(fn)
+        ext = ext[1:].lower()
+
+        skip_fn = False
+        for suf in exlude_suffixes:
+            if fn.endswith(suf):
+                skip_fn = True
+        if skip_fn:
+            continue
+
+        if ext in seq_exts:
+            part = None
+            # Prefer a sibling .part
+            candidate_part = os.path.join(source_dir, f"{stem}.part")
+            if os.path.isfile(candidate_part):
+                part = candidate_part
+            _emit_dataset(src, stem, part)
+            found_any = True
+    if found_any:
+        return out_root
+
+    # --- Layout (2): nested directories containing files {sub_id}.{fa|...} (+ optional {sub_id}.part)
+    for d in os.listdir(source_dir):
+        inner = os.path.join(source_dir, d)
+        if not os.path.isdir(inner):
+            continue
+        for subfn in os.listdir(inner):
+            path = os.path.join(inner, subfn)
+            if not os.path.isfile(path):
+                continue
+            sub_stem, sub_ext = os.path.splitext(subfn)
+            sub_ext = sub_ext[1:].lower()
+
+            skip_fn = False
+            for suf in exlude_suffixes:
+                if subfn.endswith(suf):
+                    skip_fn = True
+            if skip_fn:
+                continue
+
+            if sub_ext in seq_exts:
+                print(subfn, sub_ext)
+                dataset_name = f"{d}_{sub_stem}"
+                part = os.path.join(inner, f"{sub_stem}.part")
+                part = part if os.path.isfile(part) else None
+                _emit_dataset(path, dataset_name, part)
+
+    return out_root
+
+
+def copy_datasets(source_dir, clean_msas="1"):
+    dest_dir = _prepare_datasets_from_source(source_dir, clean_msas=clean_msas)
+    create_repr_files(dest_dir)
+
+
 def print_abs_runtimes(csv_path):
     df = pd.read_csv(csv_path)
     intervals = np.arange(0.0, 1.2, 0.2)
@@ -1340,14 +1505,19 @@ def print_abs_runtimes(csv_path):
 
 def create_plots(root_dir):
     csv_path = os.path.join(root_dir, "stats.csv")
-    make_csv_new_dirs(root_dir, out_path=csv_path)
-    plot_pd_llh_combined(csv_path, root_dir)
+    make_csv(root_dir, out_path=csv_path)
+    try:
+        plot_pd_llh_combined(csv_path, root_dir)
 
-    plot_rf(csv_path)
-    plot_rf_and_llh(csv_path)
-    plot_llh(csv_path)
-    plot_consel(csv_path)
-    plot_ntd(csv_path)
+        plot_rf(csv_path)
+        plot_rf_and_llh(csv_path)
+        plot_llh(csv_path)
+        plot_consel(csv_path)
+        plot_ntd(csv_path)
+    except Exception as e:
+        print(f"Something went wrong during plot generation. You should still be able \n"
+              f"to use the {csv_path}, for example with the dash_app.py.")
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

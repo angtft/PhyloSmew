@@ -15,15 +15,12 @@ from io import StringIO
 import ete3
 from Bio import Phylo, SeqIO, Seq, SeqRecord
 
-import msa_parser
-import scripts
 import util
 
 sys.path.insert(1, os.path.join("libs", "RAxMLGroveScripts"))
 sys.path.insert(1, os.path.join("libs", "PyPythia"))
 
 import inference_tools
-import libs.RAxMLGroveScripts.org_script as rgs
 from libs.PyPythia.prediction_no_install import predict_difficulty as pythia_predict_difficulty
 from util import *
 
@@ -34,9 +31,11 @@ BASE_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 current_dsc = config["used_dsc"]
 dsc_source = config["data_sets"][current_dsc]["source"]
 dsc_sort_by = config["data_sets"]["sort_by"][dsc_source]
-dsc_query = config["data_sets"][current_dsc]["query"]
-dsc_num_points = config["data_sets"][current_dsc]["num_points"]
-dsc_filter_file = "broken_tb_msas.txt"                               # ids from this file will be removed from analysis
+dsc_query = config["data_sets"][current_dsc]["query"] if "query" in config["data_sets"][current_dsc] else "0"
+dsc_num_points = config["data_sets"][current_dsc]["num_points"] if "num_points" in config["data_sets"][current_dsc] else 0
+dsc_use_bonk = config["data_sets"][current_dsc]["use_bonk"] if "use_bonk" in config["data_sets"][current_dsc] else False
+
+#dsc_filter_file = "broken_tb_msas.txt"                               # TODO: ids from this file will be removed from analysis
 
 if "substitution_model" not in config["data_sets"][current_dsc]:
     dsc_substitution_model = "GTR+G"
@@ -49,31 +48,42 @@ dsc_db = "latest_all.db" if "db" not in config["data_sets"][current_dsc] else co
 
 raxml_ng_path = os.path.abspath(config["software"]["raxml_ng"]["command"])
 iqt2_path = os.path.abspath(config["software"]["iqtree2"]["command"])
-fasttree2_path = os.path.abspath(config["software"]["fasttree2"]["command"])
 tqdist_path = os.path.abspath(config["software"]["tqdist"]["command"])
 pythia_predictor_path = os.path.join("libs", "PyPythia", "pypythia", "predictors", "predictor_sklearn_rf_v0.0.1.pckl")
 rgs_db_path = os.path.abspath(os.path.join("libs", "RAxMLGroveScripts", dsc_db))
 kf_script_path = os.path.abspath("kfdist.r")
-consel_dir = os.path.abspath(config["software"]["consel"]["bin_dir"])
 consel_rep = 10
 if "consel_rep" in config["data_sets"][current_dsc]:
     consel_rep = config["data_sets"][current_dsc]["consel_rep"]
 
-inference_threads = 1
+inference_threads = [1]
+if "num_threads" in config:
+    if type(config["num_threads"]) is int:
+        inference_threads = [config["num_threads"]]
+    elif type(config["num_threads"]) is list:
+        inference_threads = config["num_threads"]
+    else:
+        raise ValueError(f"Unaccepted specification of thread number in config.yaml: '{config['num_threads']}'")
+
+
+tool_dct = inference_tools.prepare_tools(config["tools"])
+# print(tool_dct)
 
 
 # ======================================================================================================================
 # The interesting part. Here one can add tools to the pipeline
 out_dir = os.path.join("out", current_dsc)
-tool_list = [
+"""tool_list = [
     inference_tools.RAxMLPars(raxml_ng_path, prefix="pars"),
     inference_tools.RAxMLNG(raxml_ng_path, prefix="raxml"),
     inference_tools.IQTREE2(iqt2_path, prefix="iqt2"),
     inference_tools.FastTree2(fasttree2_path, prefix="ft2"),
-]
+]"""
+tool_list = [tool_dct[n] for n in config["tool_list"]]
 
-if dsc_source == "TB":
-    tool_list.append(inference_tools.BigRAxMLNG(raxml_ng_path, prefix="bigraxml", check_existing="tree_best.newick"))
+# TODO: we currently cannot use those since we now started removing duplicate sequences!
+#if dsc_source == "TB":
+#    tool_list.append(inference_tools.BigRAxMLNG(raxml_ng_path, prefix="bigraxml", check_existing="tree_best.newick"))
 
 tools_dict = dict([(t.get_prefix(), t) for t in tool_list])
 # ======================================================================================================================
@@ -290,10 +300,15 @@ def fast_prepare_rgs_dataset(msa_path: str, source: str):
                 "-o", exp_dir,
                 "--generator", "alisim",
                 "-n", rgs_db_path,
-                "--use-bonk",
-                "--insert-matrix-gaps",
-                "--avoid-empty-sequences"
             ]
+            if dsc_use_bonk:
+                generate_command.extend(
+                    [
+                        "--use-bonk",
+                        "--insert-matrix-gaps",
+                        "--avoid-empty-sequences"
+                    ]
+                )
 
             _, paths = rgs.main(generate_command)
 
@@ -307,13 +322,7 @@ def fast_prepare_rgs_dataset(msa_path: str, source: str):
     if os.path.isfile(part_path):                           # TODO: do this using tree_dict
         write_raxml_part_file(part_path, dsc_substitution_model, dsc_substitution_model_set)
         write_iqt_part_file(part_path, dsc_substitution_model, dsc_substitution_model_set)
-
-    # compute difficulty
-    difficulty = pythia_predict_difficulty(os.path.join(msa_dir, "assembled_sequences.fasta"),
-        pythia_predictor_path, raxml_ng_path)
-
-    with open(os.path.join(msa_dir, "difficulty"), "w+") as file:
-        file.write(f"{difficulty}\n")
+        shutil.copy(part_path, os.path.join(msa_dir, "partitions.txt"))
 
 
 def run_raxml_evaluate(msa_path: str, tree_path: str, model: str, prefix: str, threads: int = 1,
@@ -414,9 +423,9 @@ def run_consel(slh_paths: list[str], true_slh_path: str, concat_path: str, num_r
             file.write(f"{name} {' '.join(slhs)}\n")
 
     command = [
-        os.path.join(consel_dir, "makermt"),
+        "makermt",
         "--puzzle", os.path.basename(concat_path),
-        #"-b", "50"          # TODO: use 10 times more replicates (see if that changes something for MSAs with low pattern/sites rates
+        #"-b", "50"          # TODO: maybe use 50 times more replicates (see if that changes something for MSAs with low pattern/sites rates
     ]
     if num_rep > 1:
         command.extend([
@@ -426,13 +435,13 @@ def run_consel(slh_paths: list[str], true_slh_path: str, concat_path: str, num_r
 
     consel_prefix = ".".join((os.path.basename(concat_path).split(".")[:-1]))
     command = [
-        os.path.join(consel_dir, "consel"),
+        "consel",
         consel_prefix
     ]
     subprocess.run(command, cwd=tree_dir)
 
     command = [
-        os.path.join(consel_dir, "catpv"),
+        "catpv",
         consel_prefix
     ]
     out = subprocess.run(command, cwd=tree_dir, capture_output=True, text=True)
@@ -594,7 +603,7 @@ class TrueTree(inference_tools.InferenceTool):
 
         msa_dir = os.path.dirname(str(msa_path))
         if dsc_source == "RGS":
-            tree_path = os.path.join(msa_dir, "tree_best.newick")
+            tree_path = os.path.abspath(os.path.join(msa_dir, "tree_best.newick"))
             run_raxml_evaluate(msa_path, tree_path, substitution_model, "true", threads=1)
         else:
             max_llh = "None"
@@ -619,8 +628,12 @@ class TrueTree(inference_tools.InferenceTool):
                     target_path = os.path.join(msa_dir, f"true.raxml.{suffix}")
 
                     shutil.copy(file_path, target_path)
+                    shutil.copy(
+                        os.path.join(msa_dir, f"{max_prefix.replace('_eval', '')}.runtime"),
+                        os.path.join(msa_dir, f"true.runtime")
+                    )
 
-            return os.path.join(msa_dir, "true.raxml.bestTree")
+        return os.path.join(msa_dir, "true.raxml.bestTree")
 
 
 def get_tree_ids(root_dir, source):
@@ -657,32 +670,23 @@ def get_tree_ids(root_dir, source):
     return list(sel_dct.values())
 
 
+def threads_from_outdir(o):
+    return int(o.split("t")[-1])
 
 
 out_dir = os.path.join("out", current_dsc)
-dsc_tree_ids = get_tree_ids(out_dir, dsc_source)
+ALL_OUT = [f"{out_dir}_t{t}" for t in inference_threads]
+BASE_OUT = ALL_OUT[0]
+OTHER_OUT = [od for od in ALL_OUT if od != BASE_OUT]
+
+dsc_tree_ids = get_tree_ids(BASE_OUT, dsc_source)
 
 
 rule all:
     input:
-        expand("{out_dir}/{tree_id}/rf.raxml.rfDistances",
-            out_dir=[out_dir],
-            tree_id=dsc_tree_ids),
-        expand("{out_dir}/{tree_id}/llh_diffs",
-            out_dir=[out_dir],
-            tree_id=dsc_tree_ids),
-        expand("{out_dir}/{tree_id}/ntd_dists.txt",
-           out_dir=[out_dir],
-           tree_id=dsc_tree_ids),
-        expand("{out_dir}/{tree_id}/concat_slh.catpv",
-           out_dir=[out_dir],
-           tree_id=dsc_tree_ids),
         expand("{out_dir}/{tree_id}/cleaned_dir",
-           out_dir=[out_dir],
+           out_dir=ALL_OUT,
            tree_id=dsc_tree_ids),
-
-        #expand("{out_dir}/stats.csv",
-        #   out_dir=[out_dir])
 
 
 rule clean:
@@ -691,6 +695,7 @@ rule clean:
         llhs = "{out_dir}/{tree_id}/llh_diffs",
         ntds = "{out_dir}/{tree_id}/ntd_dists.txt",
         consels = "{out_dir}/{tree_id}/concat_slh.catpv",
+        # quartet = "{out_dir}/{tree_id}/quartet_dists.txt"             # Uncomment to also compute quartet distances
     output:
         cl = "{out_dir}/{tree_id}/cleaned_dir"
     run:
@@ -714,16 +719,55 @@ rule prepare_datasets:
         msas = expand("{out_dir}/{tree_id}/assembled_sequences.fasta", out_dir=[out_dir], tree_id=dsc_tree_ids)
 
 
-rule prepare_dataset:
+rule prepare_dataset_base:
     output:
-        msa = "{out_dir}/{tree_id}/assembled_sequences.fasta",
-        difficulty = "{out_dir}/{tree_id}/difficulty"
+        msa = f"{BASE_OUT}" + "/{tree_id}/assembled_sequences.fasta",
+        best_tree = f"{BASE_OUT}" + "/{tree_id}/tree_best.newick",
     run:
-        tmp_dir = os.path.dirname(str(output.msa))
-        util.download_dataset(wildcards.tree_id, tmp_dir, dsc_source)
-        difficulty = pythia_predict_difficulty(output.msa, pythia_predictor_path, raxml_ng_path)
+        if dsc_source == "TB":              # TODO: rename those in simulated and empirical, or handle this completely differently
+            tmp_dir = os.path.dirname(str(output.msa))
+            util.download_dataset(wildcards.tree_id, tmp_dir, dsc_source)
+
+        elif dsc_source in ["RGS", "RGS_TB"]:
+            fast_prepare_rgs_dataset(output.msa, dsc_source)
+
+
+rule run_pythia:
+    input:
+        msa = f"{BASE_OUT}" + "/{tree_id}/assembled_sequences.fasta",
+    output:
+        difficulty = f"{BASE_OUT}" + "/{tree_id}/difficulty",
+    run:
+        difficulty = pythia_predict_difficulty(input.msa, pythia_predictor_path, raxml_ng_path)
         with open(output.difficulty, "w+") as file:
             file.write(f"{difficulty}\n")
+
+
+# Replicate the base dataset into every other thread-specific out_dir by copying.
+# This ensures inference happens at the per-thread MSA path without recomputing the dataset.
+rule replicate_dataset:
+    input:
+        base_msa = f"{BASE_OUT}" + "/{tree_id}/assembled_sequences.fasta",
+        base_diff = f"{BASE_OUT}" + "/{tree_id}/difficulty",
+    output:
+        msas = expand("{out_dir}/{{tree_id}}/assembled_sequences.fasta", out_dir=OTHER_OUT),
+        diffs = expand("{out_dir}/{{tree_id}}/difficulty", out_dir=OTHER_OUT),
+        best_trees = expand("{out_dir}/{{tree_id}}/tree_best.newick", out_dir=OTHER_OUT),
+    run:
+        import os, shutil
+        for dst in output.msas:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            if not os.path.exists(dst) or os.path.getmtime(dst) < os.path.getmtime(input.base_msa):
+                shutil.copy2(input.base_msa, dst)
+        for dst in output.diffs:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            if not os.path.exists(dst) or os.path.getmtime(dst) < os.path.getmtime(input.base_diff):
+                shutil.copy2(input.base_diff, dst)
+        for dst in output.best_trees:
+            base_tree_path = os.path.join(os.path.dirname(input.base_msa), "tree_best.newick")
+            if (os.path.isfile(base_tree_path) and
+                    (not os.path.exists(dst) or os.path.getmtime(dst) < os.path.getmtime(input.base_best_tree))):
+                shutil.copy2(base_tree_path, dst)
 
 
 rule run_inference:
@@ -732,7 +776,7 @@ rule run_inference:
     output:
         tree = "{out_dir}/{tree_id}/{prefix}_eval.raxml.bestTree",
         log = "{out_dir}/{tree_id}/{prefix}_eval.raxml.log"
-    threads: inference_threads      # TODO: set this somewhere else
+    threads: lambda wc: threads_from_outdir(wc.out_dir)
     run:
         time_diff = -1
         try:
@@ -765,7 +809,7 @@ rule find_true_tree:
     output:
         true_tree = "{out_dir}/{tree_id}/true.raxml.bestTree",
         log = "{out_dir}/{tree_id}/true.raxml.log"
-    threads: 4  # TODO: set this somewhere else
+    threads: lambda wc: threads_from_outdir(wc.out_dir)
     run:
         inf_tree = TrueTree("", prefix="true").run_inference(input.msa, trees=input.trees, substitution_model=dsc_substitution_model, threads=threads, dsc_source=dsc_source)
 
@@ -834,9 +878,7 @@ rule concat_trees:
                 file.write(f"{t}\n")
 
 
-
-
-
+# Currently unused, see rule "clean"
 rule compute_quartet_dists:
     input:
         concat_trees = "{out_dir}/{tree_id}/concat.bestTrees"
