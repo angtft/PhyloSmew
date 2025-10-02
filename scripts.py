@@ -925,9 +925,15 @@ def simulate_msas_with_sizes(out_dir, taxa_nums, seq_lens, repeats=10, db_name="
                 msa_parser.save_msa(sequences, msa_path, msa_format="fasta")
 
 
-def plot_pd_llh_combined(file_path, out_dir, names=["pars", "raxml", "iqt2", "ft2"]):
+def plot_pd_llh_combined(file_path, out_dir, _names=[]):
     num_buckets = 50
     df = pd.read_csv(file_path)
+
+    names = _names
+    if not _names:
+        for col in list(df.columns):
+            if col.startswith("llh_"):
+                names.append(col.split("llh_")[1])
 
     fig, axs = plt.subplots(int(len(names) / 2), int(len(names) / 2), figsize=(6 * len(names) / 2, 4 * len(names) / 2),
                             sharex=True, sharey=True,
@@ -935,12 +941,13 @@ def plot_pd_llh_combined(file_path, out_dir, names=["pars", "raxml", "iqt2", "ft
     fig.tight_layout(rect=[2, 0.06, 1, 0.95])
 
     shared_ax = None
+    legend_drawn = False
     for j in range(len(names)):
         name = names[j]
         cat_name = f"llh_{name}"
-        # ax = axs[int(j / (len(names)/2)), j % int(len(names)/2)]
+        ax = axs[int(j / (len(names)/2)), j % int(len(names)/2)]
         # ax = plt.subplot(2, 2, j+1, sharex=shared_ax, sharey=shared_ax)
-        ax = plt.subplot(2, 2, j + 1)
+        #ax = plt.subplot(2, 2, j + 1)
 
         df_pars = copy.deepcopy(df[[f"llh_{name}", "difficulty"]])
         df_pars[cat_name] = df["llh_true"] - df[f"llh_{name}"]
@@ -987,11 +994,15 @@ def plot_pd_llh_combined(file_path, out_dir, names=["pars", "raxml", "iqt2", "ft
         ax.plot(x, y_5, color="goldenrod", linestyle="-.", label="5th %")
         ax.plot(x, y_95, color="goldenrod", linestyle="-.", label="95th %")
 
-        if name == "raxml":
+        if not legend_drawn and j == (int(len(names) / 2)):
             ax.legend()
+            legend_drawn = True
 
         ax.set_yscale("log")
-        ax.set_title(f"{TOOL_NAME_DICT[name]}", fontsize=12)
+        if name in TOOL_NAME_DICT:
+            ax.set_title(f"{TOOL_NAME_DICT[name]}", fontsize=12)
+        else:
+            ax.set_title(f"{name}", fontsize=12)
 
         if j == 0:
             shared_ax = ax
@@ -1137,7 +1148,7 @@ def plot_rf_and_llh(csv_path):
     x_key = "rf"
     df = pd.read_csv(csv_path)
     intervals = np.arange(0.0, 1.2, 0.2)
-    filter_names = ["bionj"]
+    filter_names = [""]
 
     present_names = adjust_names(df)
     present_names = [name for name in present_names if name not in filter_names]
@@ -1158,7 +1169,7 @@ def plot_rf_and_llh(csv_path):
 
 
 def plot_ntd(csv_path):
-    filter_names = ["bionj"]
+    filter_names = [""]
 
     df = pd.read_csv(csv_path)
     intervals = np.arange(0.0, 1.2, 0.2)
@@ -1178,7 +1189,7 @@ def plot_ntd(csv_path):
 
 
 def plot_llh(csv_path):
-    filter_names = ["bionj"]
+    filter_names = [""]
 
     df = pd.read_csv(csv_path)
     intervals = np.arange(0.0, 1.2, 0.2)
@@ -1214,7 +1225,7 @@ def plot_llh(csv_path):
 def plot_consel(csv_path):
     df = pd.read_csv(csv_path)
     intervals = np.arange(0.0, 1.2, 0.2)
-    filter_names = ["bionj"]
+    filter_names = [""]
 
     present_names_true = adjust_names_true(df)
     present_names_true = [name for name in present_names_true if name not in filter_names]
@@ -1282,7 +1293,7 @@ def clean_msa(in_path, out_path):
     msa_parser.save_msa(no_empty_seqs, out_path, msa_format="fasta")
 
 
-def _prepare_datasets_from_source(source_dir, clean_msas="1"):
+def _prepare_datasets_from_source(source_dir, dest_dir="", dest_dir_suffix="", clean_msas="1"):
     """
     Copies MSAs and partition files assuming either 1., 2., 3. MSA directory structure.
 
@@ -1341,7 +1352,15 @@ def _prepare_datasets_from_source(source_dir, clean_msas="1"):
     if not base_name:
         base_name = os.path.basename(os.path.dirname(os.path.normpath(source_dir)))
 
-    out_root = os.path.join("out", base_name)
+    if dest_dir:
+        out_root = dest_dir
+    else:
+        if not dest_dir_suffix:
+            out_root = os.path.join("out", base_name)
+        else:
+            out_root = os.path.join("out", f"{base_name}_{dest_dir_suffix}")
+        print(f"destination directory for MSAs not specified. thus it's set to {out_root}")
+
     create_dir_if_needed(out_root)
 
     # Accepted sequence file extensions (case-insensitive)
@@ -1445,7 +1464,7 @@ def _prepare_datasets_from_source(source_dir, clean_msas="1"):
                 continue
 
             if sub_ext in seq_exts:
-                print(subfn, sub_ext)
+                print(inner, subfn, sub_ext)
                 dataset_name = f"{d}_{sub_stem}"
                 part = os.path.join(inner, f"{sub_stem}.part")
                 part = part if os.path.isfile(part) else None
@@ -1454,8 +1473,8 @@ def _prepare_datasets_from_source(source_dir, clean_msas="1"):
     return out_root
 
 
-def copy_datasets(source_dir, clean_msas="1"):
-    dest_dir = _prepare_datasets_from_source(source_dir, clean_msas=clean_msas)
+def copy_datasets(source_dir, clean_msas="1", dest_dir="", dest_dir_suffix=""):
+    dest_dir = _prepare_datasets_from_source(source_dir, clean_msas=clean_msas, dest_dir=dest_dir, dest_dir_suffix=dest_dir_suffix)
     create_repr_files(dest_dir)
 
 

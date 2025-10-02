@@ -62,10 +62,10 @@ tools:
 
 # 3. Select tools to run and evaluate in the pipeline, set number of threads
 tool_list: ["raxml1", "iqtree2"]
-num_threads: [4, 8]                               # This can be an integer or a list of integers
+num_threads: [1, 4]                               # This can be an integer or a list of integers
 
 # 4. Set the "dataset selection criteria". This name will also be used as output directory name in ./out/
-used_dsc: "smew_test_simulated"   # criteria to be used for the experiments. can be defined below
+used_dsc: "smew_test"   # criteria to be used for the experiments. can be defined below
 
 
 
@@ -80,6 +80,8 @@ data_sets:
   # test_name:      # (mandatory) name of the selection criteria
     # substitution_model:   # (mandatory) substitution model to use with this dataset. in case of partitioned datasets,
                             # this model should be used for every partition. DEFAULT: GTR+G
+    # custom_msas:          # (optional)  path to directory containing MSAs. PhyloSmew will copy those to ./out/
+                            #             before analysis.
 
     # ------
     #     the following options are only relevant if automatic dataset selection/simulation should be used.
@@ -148,9 +150,7 @@ data_sets:
     num_repeats: 1
     substitution_model: "GTR+G"
     db: "tb_all.db"
-  mge_rgs_sim_scaling_high_taxa_high_sites:     # custom MSA directory, without using RGS
+  custom_test: # custom MSA directory, without using RGS
     source: "RGS_TB"
     substitution_model: "GTR+G"
-  dna_long_empirical: # custom MSA directory, without using RGS
-    source: "RGS_TB"
-    substitution_model: "GTR+G"
+    custom_msas: "../custom_msas/structure_2"

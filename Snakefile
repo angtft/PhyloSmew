@@ -15,6 +15,7 @@ from io import StringIO
 import ete3
 from Bio import Phylo, SeqIO, Seq, SeqRecord
 
+import scripts
 import util
 
 sys.path.insert(1, os.path.join("libs", "RAxMLGroveScripts"))
@@ -65,6 +66,9 @@ if "num_threads" in config:
     else:
         raise ValueError(f"Unaccepted specification of thread number in config.yaml: '{config['num_threads']}'")
 
+if "custom_msas" in config["data_sets"][current_dsc]:
+    source_msa_dir = config["data_sets"][current_dsc]["custom_msas"]
+    scripts.copy_datasets(source_msa_dir, dest_dir_suffix=f"t{inference_threads[0]}")
 
 tool_dct = inference_tools.prepare_tools(config["tools"])
 # print(tool_dct)
