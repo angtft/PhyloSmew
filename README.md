@@ -128,7 +128,7 @@ Create a new dsc for the custom MSA in the `data_sets` section of the `config.ya
 ```yaml
 data_sets:
   # ...
-  data_id: # some identifier
+  dsc_name:                         # name it somehow
     source: "RGS_TB"                # set this to "RGS_TB", ignore the meaning (legacy stuff, will be renamed/redone in future)
     substitution_model: "GTR+G"     # set this!
 ```
