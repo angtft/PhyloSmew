@@ -718,8 +718,8 @@ dsc_tree_ids = get_tree_ids(BASE_OUT, dsc_source)
 rule all:
     input:
         clean   = expand("{out_dir}/{tree_id}/cleaned_dir", out_dir=ALL_OUT, tree_id=dsc_tree_ids),
-        ebg     = expand("{out_dir}/{tree_id}/ebg_summary.csv", out_dir=ALL_OUT, tree_id=dsc_tree_ids),     # Uncomment to compute light-weight bootstrap support statistics using EBG
-        quartet = expand("{out_dir}/{tree_id}/quartet_dists.txt", out_dir=ALL_OUT, tree_id=dsc_tree_ids),   # Uncomment to also compute quartet distances
+        #ebg     = expand("{out_dir}/{tree_id}/ebg_summary.csv", out_dir=ALL_OUT, tree_id=dsc_tree_ids),     # Uncomment to compute light-weight bootstrap support statistics using EBG
+        #quartet = expand("{out_dir}/{tree_id}/quartet_dists.txt", out_dir=ALL_OUT, tree_id=dsc_tree_ids),   # Uncomment to also compute quartet distances
 
 
 rule clean:
