@@ -9,9 +9,9 @@ empirical DNA MSAs from [TreeBASE](https://www.treebase.org/treebase-web/home.ht
 
 ## Overview
 PhyloSmew automates end‑to‑end benchmarking of tree inference tools. It can:
-- Automatically select and download MSAs, or ingest custom MSAs (empirical or simulated),
-- Run a configurable set of inference tools with different thread counts,
-- Compute statistics on the results, such as log‑likelihood differences, RF/NTD distances, quartet distances (optional), AU tests, and runtime
+- Automatically select and download MSAs, or ingest custom MSAs (empirical or simulated).
+- Run a configurable set of inference tools with different thread counts.
+- Compute statistics on the results, such as log‑likelihood differences, RF- and NT-distances, quartet distances (optional), AU tests, and runtime.
 - Aggregate results and visualize them (plots or interactive Dash app).
 
 The project includes small wrappers for RAxML‑NG, IQ‑TREE (v2 / v3), FastTree2, and VeryFastTree; new tools can be added declaratively via `config.yaml` or by implementing a custom class in `inference_tools.py`.
@@ -19,40 +19,58 @@ The project includes small wrappers for RAxML‑NG, IQ‑TREE (v2 / v3), FastTre
 ---
 
 ## Quick start
-In any case, we recommend the usage of conda or mamba (you can get an installer at https://github.com/conda-forge/miniforge).
+On any OS, we recommend the usage of conda or mamba (you can get an installer at https://github.com/conda-forge/miniforge). 
 
+> Note that [RAxML-NG](https://github.com/amkozlov/raxml-ng) is needed for the evaluation part of the pipeline. There is no 
+Windows binary available; The easiest way to run everything would be by using [WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
+For macOS there is a RAxML-NG binary, but you need to download it and set the path in the `config.yaml`.
+
+
+### 1.) Clone (with submodules, required for RAxMLGroveScripts & PyPythia)
 ```bash
-# 1) Clone (with submodules, required for RAxMLGroveScripts & PyPythia)
 git clone --recursive https://github.com/angtft/PhyloSmew.git
 cd PhyloSmew
+```
 
-# 2) (Recommended) create a fresh conda env
+### 2.) (Recommended) Create a fresh conda environment
+```bash
 conda create -n phylosmew
 conda activate phylosmew
-
-# 3) Install runtime deps (CLI tools + Python libs)
-#   scikit-learn==1.0.2 is required for the bundled PyPythia model
-conda install -c conda-forge -c bioconda biopython matplotlib numpy pandas scikit-learn==1.0.2 snakemake tqdist ete3 scikit-optimize consel
-
-# 4) Run the workflow (see config options below)
-snakemake --cores 8 --config used_dsc="smew_test"       # "smew_test" is the name of a predefined test run in the 'config.yaml'
-
-# 5) Aggregate results
-python scripts.py create_csv out/smew_test
-
-# (Optional) Dash app for interactive analysis
-conda install -c conda-forge dash plotly statsmodels
-
-# (Optional) Visualize (Dash app)
-python dash_app.py  # then open the shown URL and drop the CSV into the uploader
 ```
+
+### 3.) Install runtime dependencies (CLI tools + Python libs)
+> Note: scikit-learn==1.0.2 is required for the bundled PyPythia model
+```bash
+conda install -c conda-forge -c bioconda biopython matplotlib numpy pandas scikit-learn==1.0.2 snakemake tqdist ete3 scikit-optimize consel ebg
+```
+
+### 4.) Run the workflow (see config options below)
+```bash
+snakemake --cores 8 --config used_dsc="smew_test"       # "smew_test" is the name of a predefined test run in the 'config.yaml'
+```
+
+### 5.) Aggregate results
+```bash
+python scripts.py make_csv out/smew_test
+```
+
+### (Optional) Dash app for interactive analysis
+```bash
+conda install -c conda-forge dash plotly statsmodels
+```
+
+### (Optional) Visualize (Dash app)
+```bash
+python dash_app.py 
+```
+then open the printed URL and upload the CSV.
 
 > Tip: the default `used_dsc` in `config.yaml` is set to `smew_test` for a quick sanity check.
 
 ---
 
 ## Installation notes
-- Executables for *RAxML‑NG* and *IQ‑TREE* are vendored via the `libs/RAxMLGroveScripts/tools` directory; you can override their paths in `config.yaml`.
+- Linux executables for *RAxML‑NG* and *IQ‑TREE* are vendored via the `libs/RAxMLGroveScripts/tools` directory; you can override their paths in `config.yaml`.
 - For quartet distances (optional rules), install *tqDist* and ensure `tqdist.command` points to `all_pairs_quartet_dist` (or install via conda and keep the config entry as is).
 
 ---
@@ -60,7 +78,7 @@ python dash_app.py  # then open the shown URL and drop the CSV into the uploader
 ## Configuration (`config.yaml`)
 Key sections:
 
-### 1) `software`
+### 1.) `software`
 Paths to core executables used for evaluation or auxiliary steps:
 ```yaml
 software:
@@ -72,7 +90,7 @@ software:
     command: "all_pairs_quartet_dist"
 ```
 
-### 2) `tools`
+### 2.) `tools`
 Define how each inference tool is run. You can:
 - Provide a complete command template (`command`) and an optional `command_partitioned` variant (used when a `partitions.txt` exists), **or**
 - Specify an `inference_class` implemented in `inference_tools.py`.
@@ -102,18 +120,40 @@ tools:
 
 You can also derive a tool from another via `reference` and append flags with `add_flags`.
 
-### 3) Which tools & threads to run
+### 3.) Which tools and threads to run
 ```yaml
 tool_list: ["raxml1", "iqtree2"]
 num_threads: [4, 8]   # integer or list
 ```
 
-### 4) Dataset selection criteria
+### 4.) Dataset selection criteria
 Select which dataset group to process (also becomes the output directory name under `./out/`). The repo ships with examples such as `smew_test`.
 
 ```yaml
 used_dsc: "smew_test"
 ```
+
+### 5.) Optional statistics
+There are some optional statistics that have been disabled by default in the Snakefile, which might be interesting to some. 
+To get them to work, you would need to uncomment the corresponding line in the rule "all" in the `Snakefile`.
+
+#### a.) Quartet distances
+Self-explanatory: You can compute quartet distances between all inferred trees using tqDist (just uncomment the line). 
+
+#### b.) Predicted bootstrap support using EBG
+EBG is "a machine learning-based tool that predicts SBS branch support values for a given input phylogeny" (https://doi.org/10.1093/molbev/msae215). 
+You can uncomment the EBG support line in the `Snakefile` to run [EBG](https://github.com/wiegertj/EBG). 
+This will create a directory for every dataset and tool containing the inferred tree with assigned predicted branch support values:
+```
+./out/<dsc-name>/<dataset-id>/ebg_<tool-name>/
+  ├─ tmp                                                     # contains parsimony trees used for predictions
+  ├─ ebg_<tool-name>_median_support_prediction.newick        # tree with assigned support values
+  └─ ...
+```
+Currently, we only compute the mean and median branch supports per tool, which is why we disabled the EBG by default. 
+The execution time is dominated by the creation of 1200 parsimony starting-trees with RAxML-NG. Including the tree inference, 
+EBG is on average about 9.4 times faster than [UFBoot2](https://doi.org/10.1093/molbev/msx281). Since we would have the 
+inferred trees already, running EBG should be pretty cheap. The mean absolute error of predictions is 5 (in range 0 to 100).
 
 ---
 
@@ -123,7 +163,7 @@ In the current version, PhyloSmew can automatically select and download empirica
 [RAxMLGrove](https://github.com/angtft/RAxMLGrove) (using the simulation tool [AliSim](https://github.com/iqtree/iqtree2/wiki/AliSim)). 
 Predefined sets and examples are present in the `config.yaml`. In case a custom set of MSAs should be used, you can try the following:
 
-### 1.) Create a custom dsc 
+### 1.) Create a custom dataset configuration/selection criteria (dsc) 
 Create a new dsc for the custom MSA in the `data_sets` section of the `config.yaml` which should look like this:
 ```yaml
 data_sets:
@@ -150,7 +190,7 @@ data_sets:
 This would run the `copy_datasets()` function in `scripts.py` to copy the MSAs. Thus, if something goes wrong, you can refer to the 
 documentation and implementation there.
 
-#### b.) Kind of annoying
+#### b.) Manual setup
 You would need to set up the directories in the following structure in the `./out/` directory:
 
 ```
@@ -161,11 +201,28 @@ You would need to set up the directories in the following structure in the `./ou
 ```
 
 Then, execute:
-```
+```bash
 python scripts.py create_repr_files out/{dsc-name}
 ```
 
 ---
+
+## Results
+
+The results of the pipeline execution can be collected into a `.csv` file using
+```bash
+python scripts.py make_csv out/{dsc-name}
+```
+The CSV should contain the [Pythia](https://doi.org/10.1093/molbev/msac254)-difficulty of the MSA, 
+log-likelihood differences to "true" tree (or "best-known" tree, if no true tree available), RF- and NT-distances to true tree, 
+statistical tests implemented in [CONSEL](https://github.com/shimo-lab/consel) (AU, KH, SH, wKH, wSH), 
+and execution times.
+
+You can run the Dash app for some simple visualization of the results.
+```bash
+python dash_app.py 
+```
+
 
 ## Preprint
 

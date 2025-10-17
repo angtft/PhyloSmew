@@ -2,6 +2,8 @@ import collections
 import datetime
 import json
 import itertools
+import subprocess
+
 import numpy as np
 import os
 import random
@@ -49,7 +51,7 @@ dsc_db = "latest_all.db" if "db" not in config["data_sets"][current_dsc] else co
 
 raxml_ng_path = os.path.abspath(config["software"]["raxml_ng"]["command"])
 iqt2_path = os.path.abspath(config["software"]["iqtree2"]["command"])
-tqdist_path = os.path.abspath(config["software"]["tqdist"]["command"])
+tqdist_path = config["software"]["tqdist"]["command"]   # this can be a path or just an alias (in case tqDist was installed globally)
 pythia_predictor_path = os.path.join("libs", "PyPythia", "pypythia", "predictors", "predictor_sklearn_rf_v0.0.1.pckl")
 rgs_db_path = os.path.abspath(os.path.join("libs", "RAxMLGroveScripts", dsc_db))
 kf_script_path = os.path.abspath("kfdist.r")
@@ -565,15 +567,42 @@ def run_iqt2_topology_test(true_tree_path: str, tree_paths: list[str], msa_path:
         print(f"Exception in iqt_topology_test: {e}")
 
 
-def compute_quartet_dists(concat_trees_path: str, out_path: str):
-    concat_trees_path = str(concat_trees_path)
-    out_path = str(out_path)
+def run_ebg(msa_path, tree_path, model_path, prefix):
+    msa_path = os.path.abspath(str(msa_path))
+    tree_path = os.path.abspath(str(tree_path))
+    model_path = os.path.abspath(str(model_path))
+    dir_path = os.path.dirname(model_path)
 
     command = [
-        tqdist_path, concat_trees_path
+        "ebg", "-raxmlng", raxml_ng_path,
+        "-msa", msa_path,
+        "-tree", tree_path,
+        "-model", model_path,
+        "-redo",
+        "-o", f"ebg_{prefix}",
+        "-t", "r"
+    ]
+    try:
+        out = subprocess.run(command, cwd=dir_path, check=True, stdout=subprocess.PIPE).stdout
+    except Exception as e:
+        print(f"Exception in ebg: {e}")
+
+
+def compute_quartet_dists(concat_trees_path: str, out_path: str):
+    concat_trees_path = os.path.abspath(str(concat_trees_path))
+    out_path = os.path.abspath(str(out_path))
+    out_dir = os.path.dirname(out_path)
+
+    if os.path.isfile(os.path.abspath(tqdist_path)):
+        exe_path = os.path.abspath(tqdist_path)
+    else:
+        exe_path = tqdist_path
+
+    command = [
+        exe_path, concat_trees_path
     ]
 
-    output = subprocess.check_output(command)
+    output = subprocess.check_output(command, cwd=out_dir)
     with open(out_path, "wb+") as file:
         file.write(output)
 
@@ -688,9 +717,9 @@ dsc_tree_ids = get_tree_ids(BASE_OUT, dsc_source)
 
 rule all:
     input:
-        expand("{out_dir}/{tree_id}/cleaned_dir",
-           out_dir=ALL_OUT,
-           tree_id=dsc_tree_ids),
+        clean   = expand("{out_dir}/{tree_id}/cleaned_dir", out_dir=ALL_OUT, tree_id=dsc_tree_ids),
+        ebg     = expand("{out_dir}/{tree_id}/ebg_summary.csv", out_dir=ALL_OUT, tree_id=dsc_tree_ids),     # Uncomment to compute light-weight bootstrap support statistics using EBG
+        quartet = expand("{out_dir}/{tree_id}/quartet_dists.txt", out_dir=ALL_OUT, tree_id=dsc_tree_ids),   # Uncomment to also compute quartet distances
 
 
 rule clean:
@@ -699,7 +728,6 @@ rule clean:
         llhs = "{out_dir}/{tree_id}/llh_diffs",
         ntds = "{out_dir}/{tree_id}/ntd_dists.txt",
         consels = "{out_dir}/{tree_id}/concat_slh.catpv",
-        # quartet = "{out_dir}/{tree_id}/quartet_dists.txt"             # Uncomment to also compute quartet distances
     output:
         cl = "{out_dir}/{tree_id}/cleaned_dir"
     run:
@@ -708,15 +736,6 @@ rule clean:
         with open(output.cl, "w+") as file:
             file.write("\n")
 
-
-"""
-rule prepare_dataset:
-    output:
-        msa = "{out_dir}/{tree_id}/assembled_sequences.fasta",
-        difficulty="{out_dir}/{tree_id}/difficulty"
-    run:
-        fast_prepare_rgs_dataset(output.msa, dsc_source)
-"""
 
 rule prepare_datasets:
     input:
@@ -779,7 +798,8 @@ rule run_inference:
         msa = "{out_dir}/{tree_id}/assembled_sequences.fasta"
     output:
         tree = "{out_dir}/{tree_id}/{prefix}_eval.raxml.bestTree",
-        log = "{out_dir}/{tree_id}/{prefix}_eval.raxml.log"
+        log = "{out_dir}/{tree_id}/{prefix}_eval.raxml.log",
+        model = "{out_dir}/{tree_id}/{prefix}_eval.raxml.bestModel"
     threads: lambda wc: threads_from_outdir(wc.out_dir)
     run:
         time_diff = -1
@@ -909,7 +929,6 @@ rule all_compute_per_site_llhs:
         run_raxml_sitelh(input.msa, input.true_tree, prefix=f"trueslh")
 
 
-
 rule run_consel:
     input:
         slhs = expand("{{out_dir}}/{{tree_id}}/{prefix}_slh.raxml.siteLH", prefix=[t.get_prefix() for t in tool_list]),
@@ -919,3 +938,24 @@ rule run_consel:
         tests = "{out_dir}/{tree_id}/concat_slh.catpv"
     run:
         run_consel(input.slhs, input.true_slh, output.concat_slh)
+
+
+rule run_ebg:
+    input:
+        tree = "{out_dir}/{tree_id}/{prefix}_eval.raxml.bestTree",
+        model = "{out_dir}/{tree_id}/{prefix}_eval.raxml.bestModel",
+        msa = "{out_dir}/{tree_id}/assembled_sequences.fasta"
+    output:
+        support = "{out_dir}/{tree_id}/ebg_{prefix}/ebg_{prefix}_median_support_prediction.newick"
+    run:
+        run_ebg(input.msa, input.tree, input.model, wildcards.prefix)
+
+
+rule run_ebg_summary:
+    input:
+        support = expand("{{out_dir}}/{{tree_id}}/ebg_{prefix}/ebg_{prefix}_median_support_prediction.newick", prefix=[t.get_prefix() for t in tool_list]),
+    output:
+        summary = "{out_dir}/{tree_id}/ebg_summary.csv"
+    run:
+        util.compute_bootstrap_stats(input.support, [t.get_prefix() for t in tool_list], output.summary)
+

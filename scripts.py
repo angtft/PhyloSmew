@@ -156,6 +156,162 @@ def collect_run_times(root_dir, file_names):
     return value_dct, relative_times
 
 
+def read_ebg_summary_csv(csv_path, prefixes=None):
+    """
+    Read ebg_summary.csv (as produced by util.compute_bootstrap_stats) and
+    return a dict like:
+        ebg_mean_{prefix}   -> mean_support
+        ebg_median_{prefix} -> median_support
+    """
+    if prefixes is None:
+        prefixes = []
+    nan = float("nan")
+
+    # Pre-fill with NaNs for all requested prefixes
+    d = {}
+    for pref in prefixes:
+        if pref == "true":
+            continue
+        d[f"ebg_mean_{pref}"] = nan
+        d[f"ebg_median_{pref}"] = nan
+
+    try:
+        if os.path.isfile(csv_path):
+            df_ebg = pd.read_csv(csv_path)
+            name_col = "prefix" if "prefix" in df_ebg.columns else ("tool" if "tool" in df_ebg.columns else None)
+            if name_col is None:
+                return d
+            for _, row in df_ebg.iterrows():
+                pref = str(row[name_col])
+                if pref is None or pref != pref:
+                    continue
+                mean_sup = row.get("mean_support", None)
+                median_sup = row.get("median_support", None)
+                if mean_sup == mean_sup:
+                    d[f"ebg_mean_{pref}"] = float(mean_sup)
+                if median_sup == median_sup:
+                    d[f"ebg_median_{pref}"] = float(median_sup)
+        else:
+            return d
+    except Exception as e:
+        print(f"Warning: failed reading EBG summary {csv_path}: {e}\n"
+              f"Creating a dummy dict with ")
+    return d
+
+
+def read_quartet_distances(qdist_path, prefixes=None):
+    """
+    Return a dict mapping 'qd_{p1}_{p2}' -> distance for all unordered pairs
+    (p1 != p2) drawn from `prefixes`.
+
+    - File may contain a full square matrix or a triangular (upper/lower) one,
+      with or without diagonal. Non-numeric labels and '#' comments are ignored.
+    - If the file is missing/broken or sizes don't line up, keys stay as NaN.
+
+    Parameters
+    ----------
+    qdist_path : str
+    prefixes   : list[str]  (order determines mapping to matrix indices)
+
+    Returns
+    -------
+    dict[str, float]
+    """
+    if prefixes is None:
+        prefixes = []
+    nan = float("nan")
+
+    # Pre-fill all unordered pairs with NaN
+    out = {}
+    for i, p1 in enumerate(prefixes):
+        for j in range(i + 1, len(prefixes)):
+            p2 = prefixes[j]
+            out[f"qd_{p1}_{p2}"] = nan
+
+    try:
+        if not os.path.isfile(qdist_path):
+            return out
+
+        # Read numeric matrix rows (ignore comments/labels)
+        rows = []
+        with open(qdist_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.lstrip().startswith("#"):
+                    continue
+                toks = re.split(r"\s+", line)
+                nums = []
+                for tok in toks:
+                    try:
+                        nums.append(float(tok))
+                    except ValueError:
+                        # Ignore non-numeric tokens (e.g., row/col labels)
+                        continue
+                if nums:
+                    rows.append(nums)
+
+        if not rows:
+            return out
+
+        n_lines = len(rows)
+        # Detect shape
+        is_square = all(len(r) == n_lines for r in rows)
+        is_lower_incl = all(len(rows[i]) == i + 1 for i in range(n_lines))      # includes diagonal
+        is_lower_excl = all(len(rows[i]) == i for i in range(n_lines))          # excludes diagonal
+        is_upper_incl = all(len(rows[i]) == (n_lines - i) for i in range(n_lines))
+        is_upper_excl = all(len(rows[i]) == (n_lines - i - 1) for i in range(n_lines))
+
+        # Build full symmetric matrix M (NxN)
+        N = n_lines
+        M = [[nan] * N for _ in range(N)]
+
+        if is_square:
+            for i in range(N):
+                for j in range(N):
+                    M[i][j] = rows[i][j]
+        elif is_lower_incl:
+            for i in range(N):
+                for j in range(i + 1):
+                    v = rows[i][j]
+                    M[i][j] = v
+                    M[j][i] = v
+        elif is_lower_excl:
+            for i in range(N):
+                for k, v in enumerate(rows[i]):  # k maps to j = 0..i-1
+                    j = k
+                    M[i][j] = v
+                    M[j][i] = v
+        elif is_upper_incl:
+            for i in range(N):
+                for k, v in enumerate(rows[i]):  # j = i..N-1
+                    j = i + k
+                    M[i][j] = v
+                    M[j][i] = v
+        elif is_upper_excl:
+            for i in range(N):
+                for k, v in enumerate(rows[i]):  # j = i+1..N-1
+                    j = i + 1 + k
+                    M[i][j] = v
+                    M[j][i] = v
+        else:
+            # Unrecognized shape; keep NaNs
+            return out
+
+        # Fill values for unordered pairs using the order in `prefixes`
+        limit = min(N, len(prefixes))
+        for i in range(limit):
+            for j in range(i + 1, limit):
+                val = M[i][j]
+                key = f"qd_{prefixes[i]}_{prefixes[j]}"
+                out[key] = float(val) if val == val else nan  # keep NaN if not a number
+
+        return out
+
+    except Exception as e:
+        print(f"Warning: failed reading quartet distances '{qdist_path}': {e}")
+        return out
+
+
 def guess_data_type_from_model(model):
     """
     Guesses the datatype based on the model string. TODO: the list might be incomplete!
@@ -731,10 +887,13 @@ def make_csv(root_dir, out_path="", no_time=False):
             consel_path = os.path.join(tree_dir, "concat_slh.catpv")
             consel_tree_path = os.path.join(tree_dir, "concat_slh.siteLH")
 
+            # Optional statistics
+            ebg_path = os.path.join(tree_dir, "ebg_summary.csv")
+            qd_path = os.path.join(tree_dir, "quartet_dists.txt")
+
             tree_dict_path = os.path.join(tree_dir, "tree_dict.json")
             if not os.path.isfile(tree_dict_path):
                 print(f"no tree dict! {exp_id}")
-                continue
 
             num_part = 1
             try:
@@ -779,7 +938,16 @@ def make_csv(root_dir, out_path="", no_time=False):
             else:
                 abs_times, rel_times = ({"no_abs_time": "true"}, {"no_rel_time": "true"})
             ntds = read_ntd_file(ntd_path, cleaned_names)
+
+            # Statistical tests with CONSEL
             consels = read_consel_test_results(consel_path, consel_names)
+            full_consel = parse_consel_catpv_complete(consel_path, consel_names)
+
+            # Branch support statistics from EBG. The execution of EBG is optional, thus if the file does not exist, you would get a dict with nans
+            ebg_stats = read_ebg_summary_csv(ebg_path, consel_names)
+
+            # TODO: Quartet distances. This file is also optional. If it doesn't exist, you get a dict with nans
+            quartet_dists = read_quartet_distances(qd_path, consel_names)
 
             sl_ratios.append(pn/sl)
             if difficulty < 0.2:
@@ -813,8 +981,11 @@ def make_csv(root_dir, out_path="", no_time=False):
                 **rfs,
                 **ntds,
                 **consels,
+                **full_consel,
                 **abs_times,
-                **rel_times
+                **rel_times,
+                **ebg_stats,
+                **quartet_dists,
             }
             temp_dct = {key: [value] if not isinstance(value, (list, tuple)) else value for key, value in temp_dct.items()}
             df = pd.concat([df, pd.DataFrame(temp_dct)])
@@ -830,6 +1001,10 @@ def make_csv(root_dir, out_path="", no_time=False):
     else:
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
         df.to_csv(out_path, index=False)
+
+
+def create_csv(root_dir, out_path="", no_time=False):
+    return make_csv(root_dir, out_path, no_time=no_time)
 
 
 def msas_to_datasets(*dirs, ext=""):
@@ -1476,6 +1651,10 @@ def _prepare_datasets_from_source(source_dir, dest_dir="", dest_dir_suffix="", c
 def copy_datasets(source_dir, clean_msas="1", dest_dir="", dest_dir_suffix=""):
     dest_dir = _prepare_datasets_from_source(source_dir, clean_msas=clean_msas, dest_dir=dest_dir, dest_dir_suffix=dest_dir_suffix)
     create_repr_files(dest_dir)
+
+
+def copy_msas(source_dir, clean_msas="1", dest_dir="", dest_dir_suffix=""):
+    return copy_datasets(source_dir, clean_msas, dest_dir, dest_dir_suffix)
 
 
 def print_abs_runtimes(csv_path):

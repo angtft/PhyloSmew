@@ -7,14 +7,14 @@ software:
   iqtree2:
     command: "libs/RAxMLGroveScripts/tools/iqtree-2.2.0-beta-Linux/bin/iqtree2"           # path to executable. this should be already included in this repo
   tqdist:
-    command: "all_pairs_quartet_dist"       # (optional) only needed if the rule is executed -> uncomment the respective line in "rule clean" in the Snakemake file
+    command: "all_pairs_quartet_dist"       # (optional) only needed if the rule is executed -> uncomment the respective line in "rule all" in the Snakemake file
 
 
 # 2. define tools
 # the base structure of the tool definition is the following:
 # tool-name (which also will be used as prefix):
 #   path:
-#   command:					# string with command line parameters. PhyloSmew will use this string to insert known paths to the MSA, model, etc into {}.
+#   command:			# string with command line parameters. PhyloSmew will use this string to insert known paths to the MSA, model, etc into {}.
 #						# the base structure is based on RAxML-NG command line parameters. For more options, you can implement an InferenceClass
 #						# (see inference_tools.py)
 #         known variables are the following:
@@ -69,7 +69,7 @@ used_dsc: "smew_test"   # criteria to be used for the experiments. can be define
 
 
 
-# Optional: New definitions of dataset selection criteria
+# Optional: New definitions of dataset configuration/selection criteria (dsc)
 data_sets:
   sort_by:                        # attribute by which the datasets are sorted (no need to change, probably)
     RGS: "PATTERNS_BY_TAXA"
@@ -78,8 +78,22 @@ data_sets:
 
   # Example selection criteria:
   # test_name:      # (mandatory) name of the selection criteria
-    # substitution_model:   # (mandatory) substitution model to use with this dataset. in case of partitioned datasets,
-                            # this model should be used for every partition. DEFAULT: GTR+G
+    # substitution_model:   # (mandatory) substitution model to use for tree inferences with this dataset. in case of
+                            # partitioned datasets, this model would be used for every partition. DEFAULT: GTR+G
+                            # Currently only one model can be specified here at a time, such that DNA and AA datasets
+                            # cannot be run within the same dsc. You would need to define separate dsc.
+
+                            # IMPORTANT: in case you're using RGS to simulate MSAs, RGS will use the model and inferred
+                            #            model parameters stored in RAxMLGrove to simulate the MSAs calling AliSim.
+                            #            Setting the substitution model here will NOT change this, such that the model
+                            #            used for simulations might differ from the model used for inferences specified here.
+                            #            If (for whatever reason) you need both models to correspond, you can try to
+                            #            set the 'query' variable (see below) to filter by specific models.
+                            #            (e.g., query: "MODEL = 'HKY' and ALPHA" would select datasets inferred under
+                            #            the HKY+Gamma(+I) model). However, since ~90¼ of the datasets were inferred
+                            #            under GTR+G(+I) model, to get a large variety of datasets we do not recommend
+                            #            filtering by model.
+
     # custom_msas:          # (optional)  path to directory containing MSAs. PhyloSmew will copy those to ./out/
                             #             before analysis.
 
@@ -87,7 +101,7 @@ data_sets:
     #     the following options are only relevant if automatic dataset selection/simulation should be used.
     # ------
     # source:       # where to get data from. possible inputs are:
-                    #   RGS - RAxMLGrove simulated MSAs using BONK gap insertion by default
+                    #   RGS - RAxMLGrove simulated MSAs, without gap insertion by default
                     #   TB  - TreeBASE empirical MSAs
                     #   RGS-TB - simulated MSAs based on TreeBASE datasets
     # query:        # RGS database query (see https://github.com/angtft/RAxMLGroveScripts)

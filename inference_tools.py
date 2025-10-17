@@ -201,7 +201,7 @@ class IQTREE2(InferenceTool):
         data_type = "DNA" if (substitution_model in ["GTR", "GTR+G", "JC", "JC+G"]) else "AA"  # TODO: fix!
 
         used_substitution_model = substitution_model
-        if "+F" not in substitution_model:
+        if "+F" not in substitution_model and data_type == "DNA":
             used_substitution_model = f"{substitution_model}+FO"        # TODO: fix somewhere? assumption here is:
                                                                         #       RAxML-NG uses FO as default, IQ-TREE does not!
 
@@ -233,7 +233,7 @@ class IQTREE3_Fast(InferenceTool):
         data_type = "DNA" if (substitution_model in ["GTR", "GTR+G", "JC", "JC+G"]) else "AA"  # TODO: fix!
 
         used_substitution_model = substitution_model
-        if "+F" not in substitution_model:
+        if "+F" not in substitution_model and data_type == "DNA":
             used_substitution_model = f"{substitution_model}+FO"        # TODO: fix somewhere? assumption here is:
                                                                         #       RAxML-NG uses FO as default, IQ-TREE does not!
 

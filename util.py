@@ -2,12 +2,15 @@
 
 import collections
 import copy
+import csv
+import statistics
+import io
 import math
 import os
 import random
 import subprocess
 import sys
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Iterable, List, Union, Tuple
 
 import ete3
 import numpy as np
@@ -320,6 +323,166 @@ def get_consel_test_results(path):
             if au_res >= 0.05:
                 passed_tests[item] += 1
     return passed_tests
+
+
+def parse_consel_catpv_complete(path: Union[str, io.TextIOBase],
+                    names: List[str],
+                    *,
+                    one_based: bool = True,
+                    prefix: str = "consel") -> Dict[str, float]:
+    """
+    Parse a CONSEL .pv-like file and return a dict mapping:
+        f"{prefix}_{names[item_index]}_{test}" -> pval
+
+    - `names`: list mapping item indices to names.
+    - `one_based`: whether the 'item' column is 1-based (CONSEL is; default True).
+    - `prefix`: key prefix (default 'consel').
+
+    Skips lines that are headers, comments, or malformed. Handles optional columns
+    such as 'pp' when present. Treats 'NA' as missing and skips those keys.
+    """
+    close_after = False
+    if isinstance(path, str):
+        fh = open(path, "r", encoding="utf-8")
+        close_after = True
+    else:
+        fh = path  # file-like
+
+    try:
+        result: Dict[str, float] = {}
+        columns: List[str] = []
+        wanted = {"au", "np", "bp", "pp", "kh", "sh", "wkh", "wsh"}
+
+        for raw in fh:
+            line = raw.strip()
+            if not line or not line.startswith("#"):
+                continue
+
+            content = line.lstrip("#").strip()
+
+            # Skip the "reading ..." banner
+            if content.lower().startswith("reading "):
+                continue
+
+            # Capture header to determine column order (robust to presence/absence of 'pp')
+            if content.lower().startswith("rank ") and "|" in content:
+                header = content.replace("|", " ")
+                columns = header.split()
+                continue
+
+            # Data line: normalize separators, split
+            payload = content.replace("|", " ")
+            parts = payload.split()
+            if not parts:
+                continue
+
+            # If we didn't catch a header, fall back to the canonical order
+            if not columns:
+                columns = ["rank", "item", "obs", "au", "np", "bp", "pp", "kh", "sh", "wkh", "wsh"]
+
+            # Must at least have rank, item
+            try:
+                rank_idx = columns.index("rank")
+                item_idx = columns.index("item")
+            except ValueError:
+                # Header missing critical columns; skip
+                continue
+
+            # Parts must be long enough to cover needed indices
+            if len(parts) <= max(rank_idx, item_idx):
+                continue
+
+            # Validate row starts with integers (rank, item)
+            try:
+                _rank = int(parts[rank_idx])
+                item = int(parts[item_idx])
+            except ValueError:
+                continue
+
+            # Map item -> name
+            item_index = item - 1 if one_based else item
+            if not (0 <= item_index < len(names)):
+                # Skip if mapping is out of bounds
+                continue
+            item_name = names[item_index]
+
+            # For each wanted test that actually exists in the header, extract and store
+            for test in [c for c in columns if c in wanted]:
+                col_idx = columns.index(test)
+                if col_idx >= len(parts):
+                    continue
+                val_str = parts[col_idx]
+                if val_str.upper() == "NA":
+                    continue  # skip missing
+                try:
+                    val = float(val_str)
+                except ValueError:
+                    continue
+                result[f"{prefix}_{item_name}_{test}"] = val
+
+        return result
+    finally:
+        if close_after:
+            fh.close()
+
+
+def compute_bootstrap_stats(support_tree_paths, tool_prefixes, out_path):
+    def _collect_supports(t: ete3.Tree, ignore_root: bool = True) -> List[float]:
+        supports: List[float] = []
+        for node in t.traverse("postorder"):
+            if node.is_leaf() or (ignore_root and node.is_root()):
+                continue
+            val = getattr(node, "support", None)
+            if val is None:
+                continue
+            try:
+                supports.append(float(val))
+            except (TypeError, ValueError):
+                continue
+        return supports
+
+    def _maybe_scale_to_percent(values: List[float], auto_percent: bool = True) -> Tuple[List[float], str, bool]:
+        if not values:
+            return values, "raw", False
+        if auto_percent and all(0.0 <= v <= 1.0 for v in values):
+            return [v * 100.0 for v in values], "percent", True
+        return values, "raw", False
+
+    def _compute_bootstrap_stats(tree_path: str, prefix: str, *, ignore_root: bool = True, auto_percent: bool = True) -> dict:
+        t = ete3.Tree(tree_path)
+        supports = _collect_supports(t, ignore_root=ignore_root)
+        scaled, scale_label, scaled_flag = _maybe_scale_to_percent(supports, auto_percent=auto_percent)
+        if not scaled:
+            mean_val = float("nan")
+            median_val = float("nan")
+            n = 0
+        else:
+            mean_val = statistics.fmean(scaled) if hasattr(statistics, "fmean") else statistics.mean(scaled)
+            median_val = statistics.median(scaled)
+            n = len(scaled)
+        r = lambda x: round(x, 3) if x == x else x  # keep NaN as NaN
+        return {
+            "prefix": prefix,
+            "tree_path": str(tree_path),
+            "branches_scored": n,
+            "mean_support": r(mean_val),
+            "median_support": r(median_val),
+            "scale": scale_label,
+            "scaled_to_percent": scaled_flag,
+        }
+
+    def _write_csv(rows: Iterable[dict], out_path: str) -> None:
+        rows = list(rows)
+        fields = ["prefix", "tree_path", "branches_scored", "mean_support", "median_support", "scale", "scaled_to_percent"]
+        with open(out_path, "w", newline="") as fh:
+            import csv
+            w = csv.DictWriter(fh, fieldnames=fields)
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+
+    rows = [_compute_bootstrap_stats(tp, tool_prefixes[i]) for i, tp in enumerate(support_tree_paths)]
+    _write_csv(rows, out_path)
 
 
 def read_sim_part_file(part_path:str):
