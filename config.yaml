@@ -59,6 +59,24 @@ tools:
     path: "../veryfasttree-4.0.5/build/VeryFastTree"
     inference_class: "VeryFastTree"             # here we use a fully custom InferenceTool class implementation
 
+  # the following definitions had been used in our preprint:
+  ft2:
+    reference: "fasttree2"
+  bionj:
+    reference: "iqtree2"
+    inference_class: "IQTREE2_BIONJ"
+  pars:
+    reference: "raxml1"
+    inference_class: "RAxMLPars"
+  raxml:
+    reference: "raxml1"
+    inference_class: "RAxMLNG"
+  bigraxml:
+    reference: "raxml1"
+    inference_class: "BigRAxMLNG"
+  iqt2:
+    reference: "iqtree2"
+
 
 # 3. Select tools to run and evaluate in the pipeline, set number of threads
 tool_list: ["raxml1", "iqtree2"]
@@ -124,7 +142,7 @@ data_sets:
     query: "DATA_TYPE = 'DNA' and NUM_TAXA < 100 and OVERALL_NUM_PATTERNS < 500"
     num_points: 5
     db: "latest.db"
-  dsc6_0_7:
+  rgs_20k_bonk:
     source: "RGS"
     query: "NUM_TAXA < 470 and OVERALL_NUM_PATTERNS < 18764 and DATA_TYPE = 'DNA' and MODEL like 'GTR%' and OVERALL_NUM_ALIGNMENT_SITES > 0 and FREQ_A and RATE_AC"
     num_points: 20000

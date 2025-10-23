@@ -542,36 +542,58 @@ def create_repr_files(src_dir):
         json.dump(sel_dct, file, indent=4)
 
 
-def remove_files_from_exps(root_dir, fn_list, prefix_list):
+def remove_files_from_exps(root_dir, fn_list="", prefix_list=""):
     # "1" rf.raxml.,top_test,quartet_,llh_,ntd_,true,concat_slh,cleaned_dir
 
     for counter, exp_id in enumerate(os.listdir(root_dir)):
-        exp_dir = os.path.join(root_dir, exp_id, "msa_0", "default")
+        exp_dir = os.path.join(root_dir, exp_id)
         if not os.path.isdir(exp_dir):
-            exp_dir = os.path.join(root_dir, exp_id)
-            if not os.path.isdir(exp_dir):
-                continue
+            continue
 
-        for fn in fn_list.split(","):
-            file_path = os.path.join(exp_dir, fn)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-            else:
-                print(f"{file_path} not found!")
-
-        for fn in os.listdir(exp_dir):
-            for prefix in prefix_list.split(","):
-                if not prefix:
-                    print("no prefix!!!")
+        if fn_list:
+            for fn in fn_list.split(","):
+                if not fn:
                     continue
 
-                if fn.startswith(prefix):
-                    file_path = os.path.join(exp_dir, fn)
-                    if os.path.isfile(file_path):
-                        os.remove(file_path)
+                file_path = os.path.join(exp_dir, fn)
+                if os.path.isfile(file_path):
+                    print(f"deleting {file_path}")
+                    os.remove(file_path)
+
+        if prefix_list:
+            for fn in os.listdir(exp_dir):
+                for prefix in prefix_list.split(","):
+                    if not prefix:
+                        continue
+
+                    if fn.startswith(prefix):
+                        file_path = os.path.join(exp_dir, fn)
+                        if os.path.isfile(file_path):
+                            print(f"deleting {file_path}")
+                            os.remove(file_path)
 
         if counter % 100 == 0:
             print(counter)
+
+
+def reset_evaluation(root_dir):
+    prefixes = "rf.raxml.,top_test,quartet_,llh_,ntd_,true,concat_slh,cleaned_dir"
+
+    try:
+        resp = input(
+            f'This will permanently remove all files in "{root_dir}/{{tree_id}}"\n '
+            f'with prefixes {[f"{p}" for p in prefixes.split(",")]}\n '
+            'Type "yes" to continue: '
+        )
+    except (KeyboardInterrupt, EOFError):
+        print("\nAborted.")
+        return False
+
+    if resp.strip().lower() != "yes":
+        print("Aborted.")
+        return False
+
+    return remove_files_from_exps(root_dir, fn_list="", prefix_list=prefixes)
 
 
 def get_num_partitions(root_dir):
@@ -988,7 +1010,7 @@ def make_csv(root_dir, out_path="", no_time=False):
                 **quartet_dists,
             }
             temp_dct = {key: [value] if not isinstance(value, (list, tuple)) else value for key, value in temp_dct.items()}
-            df = pd.concat([df, pd.DataFrame(temp_dct)])
+            df = pd.concat([df, pd.DataFrame(temp_dct)], sort=False)
 
             if counter % 100 == 0:
                 print(f"{counter}")
@@ -1654,6 +1676,59 @@ def copy_datasets(source_dir, clean_msas="1", dest_dir="", dest_dir_suffix=""):
 
 
 def copy_msas(source_dir, clean_msas="1", dest_dir="", dest_dir_suffix=""):
+    """
+        Copies MSAs and partition files assuming either 1., 2., 3. MSA directory structure.
+
+        Partition files need to be in format
+            {data_type}, {model}, {part_name} = n1-n2
+        e.g.,
+            DNA, GTR+G, partition_0 = 1-280
+            DNA, GTR+G, partition_1 = 281-439
+        TODO: Currently, the model of the partition file will be overwritten in any case by the substitution_model set in
+              the config.yaml.
+
+        1. option:
+         - source_dir
+            - {msa_id1}.[fa|fasta|phylip|phylips|phy|p]
+            - {msa_id1}.part                              # if MSA msa_id1 is partitioned
+            - {msa_id2}.[fa|fasta|phylip|phylips|phy|p]
+            - {msa_id3}.[fa|fasta|phylip|phylips|phy|p]
+            ...
+
+         the output directories here will be
+            ./out/{basename of source_dir}/{msa_name1}/assembled_sequences.fasta
+            ./out/{basename of source_dir}/{msa_name1}/partitions.txt
+            ...
+
+        2. option:
+         - source_dir
+            - {msa_id1}
+                - {sub_id1}.[fa|fasta|phylip|phylips|phy|p]
+                - {sub_id1}.part
+                - {sub_id2}.[fa|fasta|phylip|phylips|phy|p]
+                ...
+            - {msa_id2}
+                - {sub_id1}.[fa|fasta|phylip|phylips|phy|p]
+            ...
+
+            the output directories here will be
+            ./out/{basename of source_dir}/{msa_name1}_{sub_id1}/assembled_sequences.fasta
+            ...
+
+        3. option (PhyloSmew structure):
+         - source_dir
+            - {msa_id1}
+                - assembled_sequences.fasta
+                - partitions.txt
+            ...
+
+        Args:
+            source_dir: directory containing MSAs
+
+        Returns:
+
+    """
+
     return copy_datasets(source_dir, clean_msas, dest_dir, dest_dir_suffix)
 
 

@@ -104,12 +104,12 @@ def prepare_tools(raw: Dict[str, Any]) -> Dict[str, InferenceTool]:
 
     for tool_name in tools:
         settings = tools[tool_name]
-        print(tool_name, settings)
+        #print(tool_name, settings)
         tool = globals()[settings["inference_class"]]
 
         out_dct[tool_name] = tool(settings["path"], settings["prefix"], settings=settings)
 
-    print(out_dct)
+    #print(out_dct)
     return out_dct
 
 

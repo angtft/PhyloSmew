@@ -22,7 +22,7 @@ The project includes small wrappers for RAxML‑NG, IQ‑TREE (v2 / v3), FastTre
 On any OS, we recommend the usage of conda or mamba (you can get an installer at https://github.com/conda-forge/miniforge). 
 
 > Note that [RAxML-NG](https://github.com/amkozlov/raxml-ng) is needed for the evaluation part of the pipeline. There is no 
-Windows binary available; The easiest way to run everything would be by using [WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
+Windows binary available; the easiest way to run everything would be by using [WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
 For macOS there is a RAxML-NG binary, but you need to download it and set the path in the `config.yaml`.
 
 
@@ -76,7 +76,7 @@ then open the printed URL and upload the CSV.
 ---
 
 ## Configuration (`config.yaml`)
-Key sections:
+Most likely you will need to touch at least some of these. Key sections:
 
 ### 1.) `software`
 Paths to core executables used for evaluation or auxiliary steps:
@@ -86,7 +86,7 @@ software:
     command: "libs/RAxMLGroveScripts/tools/raxml-ng_v1.1.0_linux_x86_64/raxml-ng"
   iqtree2:
     command: "libs/RAxMLGroveScripts/tools/iqtree-2.2.0-beta-Linux/bin/iqtree2"
-  tqdist:       # optional, only if quartet distances are enabled
+  tqdist:       # optional, only if quartet distances are uncommented in the rule "all" in the Snakefile
     command: "all_pairs_quartet_dist"
 ```
 
@@ -223,6 +223,43 @@ You can run the Dash app for some simple visualization of the results.
 python dash_app.py 
 ```
 
+---
+
+## Simple use cases
+
+### 1. "Test run"
+For a simple test run, refer to the "Quick start" above. If everything is installed, you can simply run (assuming you have 8 cores):
+```bash
+snakemake --cores 8 --config used_dsc="smew_test" num_threads=[1,4]
+```
+This should start a run with 231 jobs, which should finish quite fast, since the datasets are pretty small. 
+You should find two directories in "./out/": "smew_test_t1" (contains runs using 1 thread) and "smew_test_t4" (contains runs using 4 threads).
+
+### 2. "Recycling"
+In case you're interested in using our precomputed inferences from the preprint, including RAxML-NG 1.1, IQ-TREE 2, FastTree 2, 
+BIONJ (as implemented in IQ-TREE 2), and parsimony starting trees (from RAxML-NG 1.1), and compare your set of tools 
+against them, you can do the following:
+
+#### a.) Download our datasets
+Download our archive from https://cme.h-its.org/exelixis/material/accuracy-study/data.tar.gz (30GB!). There should be at least two separate 
+archives containing the 5k TreeBASE datasets (`tb_5k_dna.tar.gz`) and the 20k simulated datasets using RG and AliSim (`sim_20k_dna.tar.gz`). 
+Extract those in the ./out/ directory.
+
+#### b.) Setup config.yaml
+Set the `tool_list` to ["raxml", "iqt2", "ft2", "pars", "bionj"] (or to whichever tools you'd like to include from our runs), 
+define your own tools (see above) and add your own tools to this list. Set the `used_dsc` according to the name of the extracted directory.
+
+#### c.) Delete existing evaluation files
+Most of the evaluation is bound to knowing the "best" tree. Thus, you'd need to delete the already computed evaluation files using 
+```bash
+python scripts.py reset_evaluation out/{datasets}
+```
+
+### 3. "Bring Your Own Dataset"
+In case you'd like to use your own datasets, refer to the description in "MSAs" above. For example, you could use this to 
+create MSAs with different aligners and investigate their impact on the final tree inference.
+
+---
 
 ## Preprint
 

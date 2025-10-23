@@ -77,15 +77,17 @@ tool_dct = inference_tools.prepare_tools(config["tools"])
 
 
 # ======================================================================================================================
-# The interesting part. Here one can add tools to the pipeline
+# Here you can manually add tools to the pipeline, ignoring the 'config.yaml' list.
+tool_list = [tool_dct[n] for n in config["tool_list"]]
+"""
 out_dir = os.path.join("out", current_dsc)
-"""tool_list = [
+tool_list = [
     inference_tools.RAxMLPars(raxml_ng_path, prefix="pars"),
     inference_tools.RAxMLNG(raxml_ng_path, prefix="raxml"),
     inference_tools.IQTREE2(iqt2_path, prefix="iqt2"),
     inference_tools.FastTree2(fasttree2_path, prefix="ft2"),
-]"""
-tool_list = [tool_dct[n] for n in config["tool_list"]]
+]
+"""
 
 # TODO: we currently cannot use those since we now started removing duplicate sequences!
 #if dsc_source == "TB":
@@ -703,14 +705,50 @@ def get_tree_ids(root_dir, source):
     return list(sel_dct.values())
 
 
+def copy_tree_dirs(source_dir, dest_dir, tree_ids):
+    create_dir_if_needed(dest_dir)
+    for tree_id in tree_ids:
+        tree_dir = os.path.join(source_dir, tree_id)
+        dest_tree_dir = os.path.join(dest_dir, tree_id)
+        if not os.path.isdir(tree_dir) or os.path.isdir(dest_tree_dir):
+            continue
+
+        print(f"Copying {tree_dir} to {dest_tree_dir}")
+        shutil.copytree(tree_dir, dest_tree_dir)
+
+
 def threads_from_outdir(o):
     return int(o.split("t")[-1])
+
+
+def find_existing_dsc_directory(dsc_dir):
+    req_files = ["selected_datasets.json", "representatives.json"]
+    if not all([os.path.isfile(os.path.join(dsc_dir, fn)) for fn in req_files]):
+        return None
+
+    return {
+        "base_dir": dsc_dir,
+        "repr_path": os.path.join(dsc_dir, "representatives.json"),
+        "sel_path": os.path.join(dsc_dir, "selected_datasets.json"),
+    }
 
 
 out_dir = os.path.join("out", current_dsc)
 ALL_OUT = [f"{out_dir}_t{t}" for t in inference_threads]
 BASE_OUT = ALL_OUT[0]
 OTHER_OUT = [od for od in ALL_OUT if od != BASE_OUT]
+
+# TODO: this is all a bit ugly, but i don't know how to do it better yet
+EXISTING_BASE_DCT = find_existing_dsc_directory(out_dir)
+if EXISTING_BASE_DCT:
+    create_dir_if_needed(BASE_OUT)
+    if not os.path.isfile(os.path.join(BASE_OUT, "representatives.json")):
+        print(f"Found available representatives.json in {EXISTING_BASE_DCT['base_dir']}. Copying to {BASE_OUT}")
+        shutil.copy2(EXISTING_BASE_DCT["repr_path"], BASE_OUT)
+        shutil.copy2(EXISTING_BASE_DCT["sel_path"], BASE_OUT)
+    with open(EXISTING_BASE_DCT["sel_path"]) as sel_file:
+        sel_dct = json.load(sel_file)
+    copy_tree_dirs(EXISTING_BASE_DCT["base_dir"], BASE_OUT, list(sel_dct.values()))
 
 dsc_tree_ids = get_tree_ids(BASE_OUT, dsc_source)
 
