@@ -8,11 +8,15 @@ import pandas as pd
 import numpy as np
 import base64, io
 
+# NEW: multiple-testing correction for Wilcoxon
+from statsmodels.stats.multitest import multipletests
+
 APP_TITLE = "Phylogenetic Inference Benchmark Dashboard"
 
 BIN_EDGES = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 BIN_LABELS = ["0.0–0.2", "0.2–0.4", "0.4–0.6", "0.6–0.8", "0.8–1.0"]
 CORR_LLH_TOL = 0.05
+CONSEL_P_THRESHOLD = 0.05  # pass if p > 0.05
 
 # Variables users can correlate
 VAR_OPTIONS = [
@@ -20,7 +24,7 @@ VAR_OPTIONS = [
     {"label": "RF distance to TRUE", "value": "rf"},
     {"label": "NTD distance to TRUE", "value": "ntd"},
     {"label": "Δ log-likelihood (tool − true)", "value": "llh"},
-    {"label": "CONSEL AU (0/1)", "value": "consel"},
+    {"label": "CONSEL p-value", "value": "consel"},
 ]
 
 CATEGORY_OPTIONS = [
@@ -28,12 +32,12 @@ CATEGORY_OPTIONS = [
     {"label": "RF distance to TRUE", "value": "rf"},
     {"label": "NTD distance to TRUE", "value": "ntd"},
     {"label": "Relative runtime vs RAxML1 (median per bin + speedup labels)", "value": "runtime"},
-    {"label": "CONSEL AU: pass rate (%)", "value": "consel"},
-    {"label": "CONSEL AU: corrected pass rate (%)", "value": "consel_corrected"},
+    {"label": "CONSEL: pass rate (%)", "value": "consel"},
+    {"label": "CONSEL: corrected pass rate (%)", "value": "consel_corrected"},
     {"label": "Relative runtime (accumulated; sum times → speedup)", "value": "runtime_accum"},
     {"label": "Relative runtime (ignore reference < 60 s)", "value": "runtime_gt1min"},
     {"label": "Correlation (scatter + trendline + R²)", "value": "corr"},
-    {"label": "(WIP) RF distribution similarity (violin + ANOVA/KW)", "value": "rf_dist"},
+    {"label": "RF distribution similarity (violin + ANOVA/Wilcoxon)", "value": "rf_dist"},
 ]
 
 def nice_tool_label(name: str) -> str:
@@ -53,6 +57,26 @@ def bin_difficulty(df: pd.DataFrame) -> pd.DataFrame:
     )
     return out
 
+# ---------- CONSEL helpers (suffix-aware) ----------
+def get_consel_tests(df: pd.DataFrame) -> list[str]:
+    tests = set()
+    for c in df.columns:
+        if c.startswith("consel_"):
+            rest = c[len("consel_"):]
+            if "_" in rest:
+                test = rest.rsplit("_", 1)[1]
+                tests.add(test)
+    return sorted(tests)
+
+def pick_default_consel_test(df: pd.DataFrame) -> str | None:
+    tests = get_consel_tests(df)
+    if not tests:
+        return None
+    return "au" if "au" in tests else tests[0]
+
+def consel_colname(tool: str, test: str) -> str:
+    return f"consel_{tool}_{test}"
+
 def detect_tools(df: pd.DataFrame, category: str) -> list[str]:
     tools = set()
     if category in ("rf", "rf_dist", "corr"):
@@ -63,8 +87,11 @@ def detect_tools(df: pd.DataFrame, category: str) -> list[str]:
             for c in df.columns:
                 if c.startswith("llh_") and c != "llh_true":
                     tools.add(c.split("llh_", 1)[1])
-                if c.startswith("consel_") and c != "consel_true":
-                    tools.add(c.split("consel_", 1)[1])
+                if c.startswith("consel_"):
+                    rest = c[len("consel_"):]
+                    tool = rest.rsplit("_", 1)[0] if "_" in rest else rest
+                    if tool and tool != "true":
+                        tools.add(tool)
                 if c.startswith("ntd_true_"):
                     tools.add(c.split("ntd_true_", 1)[1])
     elif category == "ntd":
@@ -81,54 +108,65 @@ def detect_tools(df: pd.DataFrame, category: str) -> list[str]:
                 tools.add(c.split("abs_time_", 1)[1])
     elif category in ("consel", "consel_corrected"):
         for c in df.columns:
-            if c.startswith("consel_") and c != "consel_true":
-                tools.add(c.split("consel_", 1)[1])
+            if c.startswith("consel_"):
+                rest = c[len("consel_"):]
+                tool = rest.rsplit("_", 1)[0] if "_" in rest else rest
+                if tool and tool != "true":
+                    tools.add(tool)
     elif category in ("runtime_accum", "runtime_gt1min"):
         for c in df.columns:
             if c.startswith("abs_time_") and c != "abs_time_raxml1":
                 tools.add(c.split("abs_time_", 1)[1])
     return sorted(tools)
 
-# ---------- NEW: runtime reference picker ----------
+# ---------- runtime reference picker ----------
 def choose_runtime_reference(dfx: pd.DataFrame, selected_tools: list[str] | None):
-    """
-    Return (ref_col, ref_label). Prefer abs_time_raxml1; else first selected tool with abs_time_*;
-    else any abs_time_* column.
-    """
     if "abs_time_raxml1" in dfx.columns and dfx["abs_time_raxml1"].notna().any():
         return "abs_time_raxml1", "RAxML1"
     for t in (selected_tools or []):
         col = f"abs_time_{t}"
         if col in dfx.columns:
             return col, nice_tool_label(t)
-    # fallback to any abs_time_* column
     for c in sorted([c for c in dfx.columns if c.startswith("abs_time_")]):
         return c, nice_tool_label(c.split("abs_time_", 1)[1])
     return None, None
 
-def build_corrected_consel_long(df: pd.DataFrame, selected_tools: list[str], llh_tol: float = CORR_LLH_TOL) -> pd.DataFrame:
+# ---------- corrected CONSEL (p>threshold, with LLH correction) ----------
+def build_corrected_consel_long(df: pd.DataFrame, selected_tools: list[str], consel_test: str, llh_tol: float = CORR_LLH_TOL) -> pd.DataFrame:
     dfx = bin_difficulty(df)
-    all_consel_tools = [t for t in detect_tools(dfx, "consel") if f"consel_{t}" in dfx.columns]
-    has_llh = {t for t in all_consel_tools if f"llh_{t}" in dfx.columns}
     rows = []
+
+    def pass_flag(row, tool):
+        col = consel_colname(tool, consel_test)
+        p = row.get(col)
+        if pd.isna(p):
+            p = row.get(f"consel_{tool}")  # legacy
+        if pd.isna(p):
+            return False
+        try:
+            return float(p) > CONSEL_P_THRESHOLD
+        except Exception:
+            return False
+
     for _, row in dfx.iterrows():
-        passed = [t for t in all_consel_tools if f"consel_{t}" in dfx.columns and row.get(f"consel_{t}", 0) == 1]
-        passed_llhs = {t: row.get(f"llh_{t}") for t in passed if t in has_llh and pd.notna(row.get(f"llh_{t}"))}
-        if not passed:
-            continue
-        best_tool = max(passed_llhs, key=passed_llhs.get) if passed_llhs else None
-        if best_tool is not None:
-            passed_llhs = {best_tool: passed_llhs[best_tool]}
+        passed_tools = [t for t in selected_tools if pass_flag(row, t)]
+        llh_vals = {t: row.get(f"llh_{t}") for t in selected_tools if f"llh_{t}" in dfx.columns and pd.notna(row.get(f"llh_{t}"))}
+        if passed_tools:
+            best = None
+            if llh_vals:
+                cand = [(t, llh_vals.get(t, -np.inf)) for t in passed_tools if t in llh_vals]
+                if cand:
+                    best = max(cand, key=lambda kv: kv[1])[0]
+            passed_set = {best} if best else set(passed_tools)
+        else:
+            passed_set = set()
+
         for t in selected_tools:
-            if f"consel_{t}" not in dfx.columns:
-                continue
-            corrected = float(row.get(f"consel_{t}", 0))
-            if corrected != 1.0:
-                a_llh = row.get(f"llh_{t}")
-                if passed_llhs and pd.notna(a_llh):
-                    diffs = [abs(a_llh - b_llh) for b_llh in passed_llhs.values()]
-                    if diffs and np.min(diffs) <= llh_tol:
-                        corrected = 1.0
+            corrected = 1.0 if t in passed_set else 0.0
+            if corrected == 0.0 and passed_set and t in llh_vals:
+                diffs = [abs(llh_vals[t] - llh_vals.get(pt, -np.inf)) for pt in passed_set if pt in llh_vals]
+                if diffs and np.min(diffs) <= llh_tol:
+                    corrected = 1.0
             rows.append({
                 "exp_id": row["exp_id"],
                 "difficulty_bin": row["difficulty_bin"],
@@ -138,6 +176,7 @@ def build_corrected_consel_long(df: pd.DataFrame, selected_tools: list[str], llh
     out = pd.DataFrame(rows)
     return out.dropna(subset=["difficulty_bin"])
 
+# ---------- runtime aggregations ----------
 def aggregate_runtime_accum(df: pd.DataFrame, selected_tools: list[str]) -> pd.DataFrame:
     dfx = bin_difficulty(df).dropna(subset=["difficulty_bin"])
     ref_col, _ref_label = choose_runtime_reference(dfx, selected_tools)
@@ -182,7 +221,8 @@ def aggregate_runtime_filtered(df: pd.DataFrame, selected_tools: list[str], min_
             out.append({"difficulty_bin": b, "Tool": nice_tool_label(t), "rel": v, "speedup_str": f"{(1.0/v):.2f}×"})
     return pd.DataFrame(out)
 
-def melt_for_category(df: pd.DataFrame, category: str, tools: list[str]) -> pd.DataFrame:
+# ---------- long-form melt ----------
+def melt_for_category(df: pd.DataFrame, category: str, tools: list[str], consel_test: str | None = None) -> pd.DataFrame:
     df = bin_difficulty(df)
     pieces = []
     if category == "llh":
@@ -206,7 +246,6 @@ def melt_for_category(df: pd.DataFrame, category: str, tools: list[str]) -> pd.D
                 tmp["value"] = df[col]
                 pieces.append(tmp)
     elif category == "runtime":
-        # -------- NEW: dynamic reference for relative runtime --------
         ref_col, _ref_label = choose_runtime_reference(df, tools)
         if not ref_col:
             return pd.DataFrame()
@@ -219,13 +258,20 @@ def melt_for_category(df: pd.DataFrame, category: str, tools: list[str]) -> pd.D
                 tmp["value"] = df[col].astype(float) / denom
                 pieces.append(tmp)
     elif category == "consel":
+        if consel_test is None:
+            consel_test = pick_default_consel_test(df)
         for t in tools:
-            col = f"consel_{t}"
-            if col in df.columns:
-                tmp = df[["exp_id", "difficulty_bin"]].copy()
-                tmp["tool"] = t
-                tmp["value"] = df[col].astype(float)
-                pieces.append(tmp)
+            col = consel_colname(t, consel_test)
+            if col not in df.columns:
+                col = f"consel_{t}"
+                if col not in df.columns:
+                    continue
+            tmp = df[["exp_id", "difficulty_bin"]].copy()
+            tmp["tool"] = t
+            vals = df[col].astype(float)
+            tmp["value"] = (vals > CONSEL_P_THRESHOLD).astype(float)
+            pieces.append(tmp)
+
     if not pieces:
         return pd.DataFrame()
     out = pd.concat(pieces, ignore_index=True)
@@ -251,7 +297,10 @@ def _apply_counts_to_facet_titles(fig, counts_map: dict):
         if n is not None:
             ann.text = f"{label} ({n})"
 
-# -------- Correlation, per-bin KS heatmaps, and ANOVA --------
+# -------- Correlation, per-bin Wilcoxon (Holm-adjusted), and ANOVA --------
+def pick_default_consel_test_for_corr(df: pd.DataFrame) -> str | None:
+    return pick_default_consel_test(df)
+
 def _get_series(df: pd.DataFrame, var: str, tool: str | None):
     if var == "difficulty":
         return df["difficulty"].astype(float)
@@ -269,8 +318,15 @@ def _get_series(df: pd.DataFrame, var: str, tool: str | None):
             return (df[col] - df["llh_true"]).astype(float)
         return None
     if var == "consel":
-        col = f"consel_{tool}"
-        return df[col].astype(float) if col in df.columns else None
+        test = pick_default_consel_test_for_corr(df)
+        if not test:
+            return None
+        col = consel_colname(tool, test)
+        if col not in df.columns:
+            col = f"consel_{tool}"
+            if col not in df.columns:
+                return None
+        return df[col].astype(float)
     return None
 
 def figure_corr_scatter(df: pd.DataFrame, selected_tools: list[str], xvar: str, yvar: str):
@@ -301,7 +357,7 @@ def figure_corr_scatter(df: pd.DataFrame, selected_tools: list[str], xvar: str, 
         "rf": "RF distance to TRUE",
         "ntd": "NTD distance to TRUE",
         "llh": "Δ log-likelihood (tool − true)",
-        "consel": "CONSEL AU (0/1)",
+        "consel": "CONSEL p-value",
         "difficulty": "Difficulty",
     }
     fig = go.Figure(traces)
@@ -312,12 +368,19 @@ def figure_corr_scatter(df: pd.DataFrame, selected_tools: list[str], xvar: str, 
     )
     return fig
 
-def ks_heatmap_per_bin_figure(long_df: pd.DataFrame, selected_tools: list[str], counts_map: dict):
+def wilcoxon_heatmap_per_bin_figure(long_df: pd.DataFrame, selected_tools: list[str], counts_map: dict):
+    """
+    For each difficulty bin:
+      1) Align paired values by exp_id for every tool pair
+      2) Compute two-sided Wilcoxon signed-rank test p-values on paired differences
+      3) Apply Holm FWER correction *within the bin* across all unique tool pairs
+      4) Plot a per-bin heatmap of Holm-adjusted p-values (symmetric; diag=1)
+    """
     dfp = long_df.copy()
     dfp = dfp[dfp["tool"].isin(selected_tools)]
     bins_present = [b for b in BIN_LABELS if b in dfp["difficulty_bin"].unique().tolist()]
     if not bins_present:
-        return px.imshow(np.zeros((1, 1)), title="No data for KS heatmaps")
+        return px.imshow(np.zeros((1, 1)), title="No data for Wilcoxon heatmaps")
 
     tool_order = sorted(dfp["tool"].unique())
     ticktext = [nice_tool_label(t) for t in tool_order]
@@ -331,34 +394,78 @@ def ks_heatmap_per_bin_figure(long_df: pd.DataFrame, selected_tools: list[str], 
     )
 
     try:
-        from scipy.stats import ks_2samp
+        from scipy.stats import wilcoxon
+        from itertools import combinations
+
         for idx, b in enumerate(bins_present, start=1):
             sub = dfp[dfp["difficulty_bin"] == b]
+            pivot = sub.pivot_table(index="exp_id", columns="tool", values="value", aggfunc="first")
+
+            # Collect unique pairwise p-values (i<j)
+            pair_indices = []
+            pvals = []
+            ns = []
+            for i, j in combinations(range(n_tools), 2):
+                ta, tb = tool_order[i], tool_order[j]
+                if ta in pivot.columns and tb in pivot.columns:
+                    paired = pivot[[ta, tb]].dropna()
+                    n = paired.shape[0]
+                    pval = np.nan
+                    if n >= 1:
+                        diffs = (paired[ta] - paired[tb]).values
+                        if np.allclose(diffs, 0):
+                            pval = 1.0
+                        else:
+                            try:
+                                res = wilcoxon(diffs, zero_method="wilcox", alternative="two-sided", correction=False, mode="auto")
+                                pval = float(res.pvalue)
+                            except Exception:
+                                pval = np.nan
+                    pair_indices.append((i, j))
+                    pvals.append(1.0 if pd.isna(pval) else pval)
+                    ns.append(n)
+
+            # Holm adjust within this bin
+            if pvals:
+                _, p_adj, _, _ = multipletests(pvals, alpha=0.05, method="holm")
+            else:
+                p_adj = []
+
+            # Build symmetric z-matrix of adjusted p-values
             z = np.full((n_tools, n_tools), np.nan)
-            for i, ta in enumerate(tool_order):
-                xa = sub[sub["tool"] == ta]["value"].dropna().values
-                for j, tb in enumerate(tool_order):
-                    xb = sub[sub["tool"] == tb]["value"].dropna().values
-                    if i == j:
-                        z[i, j] = 1.0
-                    elif len(xa) >= 2 and len(xb) >= 2:
-                        res = ks_2samp(xa, xb, alternative="two-sided", method="auto")
-                        z[i, j] = float(res.pvalue)
+            for i in range(n_tools):
+                z[i, i] = 1.0
+            for (i, j), p in zip(pair_indices, p_adj):
+                z[i, j] = p
+                z[j, i] = p
+
+            # Optional: customdata for hover (n of pairs)
+            custom = np.empty((n_tools, n_tools, 1))
+            custom[:] = np.nan
+            for (i, j), n in zip(pair_indices, ns):
+                custom[i, j, 0] = n
+                custom[j, i, 0] = n
+
             heat = go.Heatmap(
                 z=z, x=ticktext, y=ticktext, zmin=0, zmax=1,
                 showscale=(idx == len(bins_present)),
-                colorbar=dict(title="p-value", len=0.8)
+                colorbar=dict(title="p (Holm)", len=0.8),
+                customdata=custom,
+                hovertemplate="%(a)s vs %(b)s<br>n pairs=%{customdata[0]:.0f}<br>p (Holm)=%{z:.3g}<extra></extra>"
+                    .replace("%(a)s", "%{y}")
+                    .replace("%(b)s", "%{x}")
             )
             fig.add_trace(heat, row=1, col=idx)
             fig.update_xaxes(tickangle=45, row=1, col=idx)
+
     except Exception as e:
         fig.add_annotation(
-            text=f"KS heatmaps unavailable (SciPy not available: {e})",
+            text=f"Wilcoxon heatmaps unavailable (SciPy/statsmodels not available: {e})",
             xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False
         )
 
     fig.update_layout(
-        title="Pairwise KS-test p-values for RF distributions — per difficulty bin (higher = more similar)",
+        title="Pairwise Wilcoxon signed-rank p-values (Holm-adjusted) for RF — per difficulty bin",
         margin=dict(t=80, r=10, l=10, b=40),
     )
     return fig
@@ -385,7 +492,7 @@ def anova_text_block(long_df: pd.DataFrame, selected_tools: list[str], response_
         return "Two-way ANOVA unavailable (install `statsmodels`). Details: " + str(e)
 
 # ---------------- Figure factory ----------------
-def make_figure(df: pd.DataFrame, long_df: pd.DataFrame, category: str, selected_tools: list[str], counts_map: dict):
+def make_figure(df: pd.DataFrame, long_df: pd.DataFrame, category: str, selected_tools: list[str], counts_map: dict, consel_test: str | None):
     if category in ("llh", "rf", "ntd"):
         if long_df.empty:
             return px.scatter(title="No data to display (check your selections & columns).")
@@ -417,7 +524,6 @@ def make_figure(df: pd.DataFrame, long_df: pd.DataFrame, category: str, selected
     if category == "runtime":
         if long_df.empty:
             return px.bar(title="No runtime data to display.")
-        # dynamic title baseline
         ref_col, ref_label = choose_runtime_reference(bin_difficulty(df), selected_tools)
         ref_label = ref_label or "reference"
         dfp = long_df.copy()
@@ -456,6 +562,7 @@ def make_figure(df: pd.DataFrame, long_df: pd.DataFrame, category: str, selected
                .mean().reset_index(name="pass_rate"))
         agg["percent"] = (agg["pass_rate"] * 100).round(1)
         agg["difficulty_bin"] = pd.Categorical(agg["difficulty_bin"], categories=BIN_LABELS, ordered=True)
+        test_lbl = (consel_test or pick_default_consel_test(df) or "").upper()
         fig = px.bar(
             agg, x="Tool", y="percent", color="Tool",
             facet_col="difficulty_bin", category_orders={"difficulty_bin": BIN_LABELS},
@@ -466,7 +573,7 @@ def make_figure(df: pd.DataFrame, long_df: pd.DataFrame, category: str, selected
             if ax.startswith("yaxis"):
                 fig.layout[ax].update(range=[0, 105])
         fig.update_layout(
-            title="CONSEL AU Pass Rate (%) by Difficulty Bin",
+            title=f"CONSEL ({test_lbl}) Pass Rate (%) by Difficulty Bin  —  pass = p > {CONSEL_P_THRESHOLD}",
             xaxis_title="Tool", yaxis_title="Pass rate (%)",
             legend_title="Tool", margin=dict(t=60, r=10, l=10, b=40),
             uniformtext_minsize=10, uniformtext_mode="hide",
@@ -477,14 +584,15 @@ def make_figure(df: pd.DataFrame, long_df: pd.DataFrame, category: str, selected
         return fig
 
     if category == "consel_corrected":
-        long_corr = build_corrected_consel_long(df, selected_tools)
-        if long_corr.empty:
-            return px.bar(title="No data for corrected CONSEL (need consel_* and llh_* columns).")
-        agg = (long_corr.groupby(["difficulty_bin", "tool"], observed=True)["value"]
-               .mean().reset_index())
-        agg["Tool"] = agg["tool"].map(nice_tool_label)
-        agg["percent"] = (agg["value"] * 100).round(1)
+        if long_df.empty:
+            return px.bar(title="No data for corrected CONSEL (need consel_*_* and llh_* columns).")
+        dfp = long_df.copy()
+        dfp["Tool"] = dfp["tool"].map(nice_tool_label)
+        agg = (dfp.groupby(["difficulty_bin", "Tool"], observed=True)["value"]
+               .mean().reset_index(name="pass_rate"))
+        agg["percent"] = (agg["pass_rate"] * 100).round(1)
         agg["difficulty_bin"] = pd.Categorical(agg["difficulty_bin"], categories=BIN_LABELS, ordered=True)
+        test_lbl = (consel_test or pick_default_consel_test(df) or "").upper()
         fig = px.bar(
             agg, x="Tool", y="percent", color="Tool",
             facet_col="difficulty_bin", category_orders={"difficulty_bin": BIN_LABELS},
@@ -495,7 +603,7 @@ def make_figure(df: pd.DataFrame, long_df: pd.DataFrame, category: str, selected
             if ax.startswith("yaxis"):
                 fig.layout[ax].update(range=[0, 105])
         fig.update_layout(
-            title=f"Corrected CONSEL AU Pass Rate (%) by Difficulty Bin (LLH tolerance {CORR_LLH_TOL})",
+            title=f"Corrected CONSEL ({test_lbl}) Pass Rate (%) by Difficulty Bin  —  pass = (p > {CONSEL_P_THRESHOLD}) or within ΔLLH ≤ {CORR_LLH_TOL}",
             xaxis_title="Tool", yaxis_title="Pass rate (%)",
             legend_title="Tool", margin=dict(t=60, r=10, l=10, b=40),
             uniformtext_minsize=10, uniformtext_mode="hide",
@@ -636,9 +744,27 @@ app.layout = html.Div(
             ],
         ),
 
+        # CONSEL test selector
+        html.Div(
+            id="consel-controls",
+            style={"display": "none", "marginTop": "0.5rem"},
+            children=[
+                html.Label("CONSEL test"),
+                dcc.RadioItems(
+                    id="consel-test",
+                    options=[],
+                    value=None,
+                    inline=True,
+                    style={"display": "flex", "gap": "0.75rem", "flexWrap": "wrap"},
+                    inputStyle={"marginRight": "0.35rem"},
+                ),
+                html.Div(style={"color": "#666", "marginTop": "0.25rem"}, children=f"Pass criterion: p > {CONSEL_P_THRESHOLD}")
+            ],
+        ),
+
         dcc.Graph(id="main-graph", style={"height": "60vh", "marginTop": "0.5rem"}),
 
-        # SHOW/HIDE this entire block depending on category (only in rf_dist)
+        # Only shown in rf_dist
         html.Div(
             id="anova-container",
             style={"display": "none", "marginTop": "0.5rem"},
@@ -654,7 +780,8 @@ app.layout = html.Div(
                 html.Li("ΔLLH = llh_tool − llh_true (0 means equal to TRUE; larger is better)."),
                 html.Li("RF uses columns like rf_true_TOOL. NTD uses ntd_true_TOOL."),
                 html.Li("Runtime uses median(abs_time_TOOL / abs_time_REF) per bin; labels show speedup = 1 / median runtime. REF is RAxML1 if present, else the first selected tool."),
-                html.Li("CONSEL bars show mean pass rate × 100 within each bin."),
+                html.Li("CONSEL pass = p-value > 0.05. When 'corrected', a fail may pass if ΔLLH ≤ tolerance to a passing tool."),
+                html.Li("RF Wilcoxon heatmaps show Holm-adjusted two-sided p-values per bin."),
                 html.Li("Difficulty bins: [0.0,0.2], (0.2,0.4], (0.4,0.6], (0.6,0.8], (0.8,1.0]."),
                 html.Li("Facet titles include (n) = number of unique experiments in that bin."),
             ])
@@ -717,7 +844,6 @@ def update_tool_options(df_json, category, thread_selected):
     options = [{"label": nice_tool_label(t), "value": t} for t in tools]
     return options, tools  # default: select all
 
-# Show correlation controls only when category == 'corr'
 @app.callback(
     Output("corr-controls", "style"),
     Input("category", "value"),
@@ -725,7 +851,28 @@ def update_tool_options(df_json, category, thread_selected):
 def toggle_corr_controls(category):
     return {"display": "flex", "gap": "0.75rem", "alignItems": "end", "flexWrap": "wrap"} if category == "corr" else {"display": "none"}
 
-# Show the second panel ONLY in rf_dist
+@app.callback(
+    Output("consel-controls", "style"),
+    Input("category", "value"),
+)
+def toggle_consel_controls(category):
+    return {"display": "block", "marginTop": "0.5rem"} if category in ("consel", "consel_corrected") else {"display": "none"}
+
+@app.callback(
+    Output("consel-test", "options"),
+    Output("consel-test", "value"),
+    Input("data-store", "data"),
+    Input("category", "value"),
+)
+def populate_consel_tests(df_json, category):
+    if not df_json:
+        return [], None
+    df = pd.read_json(df_json, orient="split")
+    tests = get_consel_tests(df)
+    opts = [{"label": t.upper(), "value": t} for t in tests]
+    default = "au" if "au" in tests else (tests[0] if tests else None)
+    return opts, default
+
 @app.callback(
     Output("anova-container", "style"),
     Input("category", "value"),
@@ -743,8 +890,9 @@ def toggle_anova_container(category):
     Input("thread-radio", "value"),
     Input("xvar", "value"),
     Input("yvar", "value"),
+    Input("consel-test", "value"),
 )
-def update_graph(df_json, category, selected_tools, thread_selected, xvar, yvar):
+def update_graph(df_json, category, selected_tools, thread_selected, xvar, yvar, consel_test):
     blank = px.scatter(title="")
     if not df_json:
         return px.scatter(title="Upload a CSV to begin."), blank, ""
@@ -757,9 +905,12 @@ def update_graph(df_json, category, selected_tools, thread_selected, xvar, yvar)
 
     counts_map = _counts_by_bin_from_df(df)
 
-    if category in ("llh", "rf", "ntd", "runtime", "consel", "rf_dist"):
+    if category in ("llh", "rf", "ntd", "runtime", "consel", "rf_dist", "consel_corrected"):
         melt_cat = category if category != "rf_dist" else "rf"
-        long_df = melt_for_category(df, melt_cat, selected_tools)
+        if category == "consel_corrected":
+            long_df = pd.DataFrame()
+        else:
+            long_df = melt_for_category(df, melt_cat, selected_tools, consel_test=consel_test)
     else:
         long_df = pd.DataFrame()
 
@@ -787,14 +938,49 @@ def update_graph(df_json, category, selected_tools, thread_selected, xvar, yvar)
         _strip_facet_prefixes(fig_violin)
         _apply_counts_to_facet_titles(fig_violin, counts_map)
 
-        fig_heat = ks_heatmap_per_bin_figure(long_df, selected_tools, counts_map)
+        fig_heat = wilcoxon_heatmap_per_bin_figure(long_df, selected_tools, counts_map)
         stats_text = anova_text_block(long_df, selected_tools, "RF distance")
         return fig_violin, fig_heat, stats_text
 
-    # All other categories: only main figure is relevant
-    main = make_figure(df, long_df, category, selected_tools, counts_map)
+    if category == "consel":
+        main = make_figure(df, long_df, category, selected_tools, counts_map, consel_test)
+        return main, blank, ""
+
+    if category == "consel_corrected":
+        if not selected_tools:
+            return px.bar(title="Select at least one tool."), blank, ""
+        long_corr = build_corrected_consel_long(df, selected_tools, consel_test or pick_default_consel_test(df))
+        if long_corr.empty:
+            return px.bar(title="No data for corrected CONSEL (need consel_*_* and llh_* columns)."), blank, ""
+        dfp = long_corr.copy()
+        dfp["Tool"] = dfp["tool"].map(nice_tool_label)
+        agg = (dfp.groupby(["difficulty_bin", "Tool"], observed=True)["value"]
+               .mean().reset_index(name="pass_rate"))
+        agg["percent"] = (agg["pass_rate"] * 100).round(1)
+        agg["difficulty_bin"] = pd.Categorical(agg["difficulty_bin"], categories=BIN_LABELS, ordered=True)
+        test_lbl = (consel_test or pick_default_consel_test(df) or "").upper()
+        fig = px.bar(
+            agg, x="Tool", y="percent", color="Tool",
+            facet_col="difficulty_bin", category_orders={"difficulty_bin": BIN_LABELS},
+            text="percent",
+        )
+        fig.update_traces(texttemplate="%{text}%", textposition="outside")
+        for ax in fig.layout:
+            if ax.startswith("yaxis"):
+                fig.layout[ax].update(range=[0, 105])
+        fig.update_layout(
+            title=f"Corrected CONSEL ({test_lbl}) Pass Rate (%) by Difficulty Bin  —  pass = (p > {CONSEL_P_THRESHOLD}) or within ΔLLH ≤ {CORR_LLH_TOL}",
+            xaxis_title="Tool", yaxis_title="Pass rate (%)",
+            legend_title="Tool", margin=dict(t=60, r=10, l=10, b=40),
+            uniformtext_minsize=10, uniformtext_mode="hide",
+        )
+        fig.update_xaxes(tickangle=45)
+        _strip_facet_prefixes(fig)
+        _apply_counts_to_facet_titles(fig, counts_map)
+        return fig, blank, ""
+
+    main = make_figure(df, long_df, category, selected_tools, counts_map, consel_test)
     return main, blank, ""
 
 if __name__ == "__main__":
     app.run(debug=True)
-
