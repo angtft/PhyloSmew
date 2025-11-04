@@ -1,5 +1,5 @@
 {% set name = "phylosmew" %}
-{% set version = "0.1.0" %}
+{% set version = "0.1.1" %}
 
 package:
   name: {{ name|lower }}
@@ -7,7 +7,7 @@ package:
 
 source:
   git_url: https://github.com/angtft/PhyloSmew.git
-  git_rev: v{{ version }}     # tag this in your repo
+  git_rev: v{{ version }}
 
 channels:
   - conda-forge
@@ -57,7 +57,6 @@ test:
 about:
   home: https://github.com/angtft/PhyloSmew
   summary: "Phylogenetic Snakemake evaluation workflow (CLI + Dash)"
-  license: GPL-3.0-or-later
 
 extra:
   recipe-maintainers:
