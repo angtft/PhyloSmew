@@ -1,31 +1,22 @@
-import collections
 import datetime
 import json
-import itertools
-import subprocess
 
 import numpy as np
 import os
-import random
+from pathlib import Path
 import shutil
-import statistics
 import sys
 import time
 import traceback
-from io import StringIO
 
 import ete3
 from Bio import Phylo, SeqIO, Seq, SeqRecord
 
-import scripts
-import util
-
-sys.path.insert(1, os.path.join("libs", "RAxMLGroveScripts"))
-sys.path.insert(1, os.path.join("libs", "PyPythia"))
-
-import inference_tools
-from libs.PyPythia.prediction_no_install import predict_difficulty as pythia_predict_difficulty
-from util import *
+from phylosmew.legacy import inference_tools, scripts, util
+from pypythia.prediction import predict_difficulty as pythia_predict_difficulty
+from phylosmew.legacy.util import *
+from phylosmew.libs import _RGS_ROOT
+import org_script as rgs
 
 configfile: "config.yaml"
 
@@ -50,10 +41,12 @@ else:
 dsc_db = "latest_all.db" if "db" not in config["data_sets"][current_dsc] else config["data_sets"][current_dsc]["db"]
 
 raxml_ng_path = os.path.abspath(config["software"]["raxml_ng"]["command"])
+if not os.path.isfile(raxml_ng_path):
+    raxml_ng_path = config["software"]["raxml_ng"]["command"]
+
 iqt2_path = os.path.abspath(config["software"]["iqtree2"]["command"])
 tqdist_path = config["software"]["tqdist"]["command"]   # this can be a path or just an alias (in case tqDist was installed globally)
-pythia_predictor_path = os.path.join("libs", "PyPythia", "pypythia", "predictors", "predictor_sklearn_rf_v0.0.1.pckl")
-rgs_db_path = os.path.abspath(os.path.join("libs", "RAxMLGroveScripts", dsc_db))
+rgs_db_path = os.path.abspath(os.path.join("../libs","RAxMLGroveScripts", dsc_db))
 kf_script_path = os.path.abspath("kfdist.r")
 consel_rep = 10
 if "consel_rep" in config["data_sets"][current_dsc]:
@@ -265,8 +258,7 @@ def prepare_rgs_dataset(repr_path: str, msa_path: str, source: str):
         write_iqt_part_file(part_path, dsc_substitution_model, dsc_substitution_model_set)
 
     # compute difficulty
-    difficulty = pythia_predict_difficulty(os.path.join(msa_dir, "assembled_sequences.fasta"),
-        pythia_predictor_path, raxml_ng_path)
+    difficulty = pythia_predict_difficulty(os.path.join(msa_dir, "assembled_sequences.fasta"))
 
     with open(os.path.join(msa_dir, "difficulty"), "w+") as file:
         file.write(f"{difficulty}\n")
@@ -352,7 +344,7 @@ def run_raxml_evaluate(msa_path: str, tree_path: str, model: str, prefix: str, t
     try:
         out = subprocess.run(command.split(), cwd=folder_path)
     except Exception as e:
-        print(e)
+        print(f"RAxML-NG evaluate: {e}")
 
     # in case it went wrong because the tree was multifurcated
     if not retry and not os.path.isfile(os.path.join(folder_path, f"{new_prefix}.raxml.bestTree")):
@@ -733,7 +725,11 @@ def find_existing_dsc_directory(dsc_dir):
     }
 
 
-out_dir = os.path.join("out", current_dsc)
+if "out_dir" in config:
+    out_dir = os.path.join(config["out_dir"], current_dsc)
+else:
+    out_dir = os.path.join("out", current_dsc)
+
 ALL_OUT = [f"{out_dir}_t{t}" for t in inference_threads]
 BASE_OUT = ALL_OUT[0]
 OTHER_OUT = [od for od in ALL_OUT if od != BASE_OUT]
@@ -799,7 +795,7 @@ rule run_pythia:
     output:
         difficulty = f"{BASE_OUT}" + "/{tree_id}/difficulty",
     run:
-        difficulty = pythia_predict_difficulty(input.msa, pythia_predictor_path, raxml_ng_path)
+        difficulty = pythia_predict_difficulty(Path(input.msa))
         with open(output.difficulty, "w+") as file:
             file.write(f"{difficulty}\n")
 

@@ -12,12 +12,12 @@ import numpy as np
 #  `np.int` was a deprecated alias for the builtin `int` [...]"
 np.int = int
 
-from util import *
+from phylosmew.legacy.util import *
 
 
 class InferenceTool:
     def __init__(self, executable_path: str, prefix: str = None, **kwargs):
-        self.executable_path = os.path.abspath(executable_path)
+        self.executable_path = executable_path
         self.prefix = prefix if prefix else self.__class__.__name__
         self.seed = None
         if "seed" in kwargs:
@@ -455,8 +455,12 @@ class SimpleGeneric(InferenceTool):
         else:
             command_str = self.settings["command_partitioned"]
 
+        exe_path = os.path.abspath(self.executable_path)
+        if not os.path.isfile(exe_path):
+            exe_path = os.path.basename(self.executable_path)       # we assume that the tool was globally installed
+
         command_str = command_str.format(
-            exe_path = os.path.abspath(self.executable_path),
+            exe_path = exe_path,
             msa_path = os.path.basename(msa_path),
             model = substitution_model,
             threads = threads,

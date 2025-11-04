@@ -2,7 +2,6 @@
 
 import collections
 import copy
-import csv
 import statistics
 import io
 import math
@@ -10,14 +9,15 @@ import os
 import random
 import subprocess
 import sys
-from typing import Optional, Dict, Any, Iterable, List, Union, Tuple
+from typing import Dict, Iterable, List, Union, Tuple
 
 import ete3
 import numpy as np
 
-sys.path.insert(1, os.path.join("libs", "RAxMLGroveScripts"))
-import libs.RAxMLGroveScripts.org_script as rgs
-import msa_parser
+#sys.path.insert(1, os.path.join("../libs", "RAxMLGroveScripts"))
+from phylosmew.libs import _RGS_ROOT
+import org_script as rgs
+import phylosmew.legacy.msa_parser as msa_parser
 
 # ======================================================================================================================
 # Benoit's stuff

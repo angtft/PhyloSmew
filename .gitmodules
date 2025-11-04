@@ -1,6 +1,3 @@
-[submodule "libs/PyPythia"]
-	path = libs/PyPythia
-	url = https://github.com/tschuelia/PyPythia.git
-[submodule "libs/RAxMLGroveScripts"]
-	path = libs/RAxMLGroveScripts
+[submodule "src/phylosmew/libs/RAxMLGroveScripts"]
+	path = src/phylosmew/libs/RAxMLGroveScripts
 	url = https://github.com/angtft/RAxMLGroveScripts.git

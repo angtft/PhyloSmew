@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
-import argparse
-import collections
-from distutils.dir_util import copy_tree
-from io import StringIO
 import itertools
 import json
-from math import e, log
-import math
 import os
-import random
 import re
 import shutil
-import statistics
-import subprocess
 import traceback
 import sys
 import yaml
@@ -22,17 +13,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 
-import msa_parser
+from pypythia.prediction import predict_difficulty as pythia_predict_difficulty
+from phylosmew.legacy.util import *
 
-sys.path.insert(1, os.path.join("libs", "RAxMLGroveScripts"))
-sys.path.insert(1, os.path.join("libs", "PyPythia"))
-
-import inference_tools
-import libs.RAxMLGroveScripts.org_script as rgs
-from libs.PyPythia.prediction_no_install import predict_difficulty as pythia_predict_difficulty
-from util import *
-
-pythia_predictor_path = os.path.join("libs", "PyPythia", "pypythia", "predictors", "predictor_sklearn_rf_v0.0.1.pckl")
+pythia_predictor_path = os.path.join("../libs", "PyPythia", "pypythia", "predictors", "predictor_sklearn_rf_v0.0.1.pckl")
 
 CAT_NAME_DICT = {
     "rf": "RF distance",
@@ -819,7 +803,7 @@ def make_csv(root_dir, out_path="", no_time=False):
     """
 
     def _discover_thread_dirs(base_dir):
-        base_dir = os.path.abspath(base_dir.rstrip(os.sep))
+        base_dir = os.path.abspath(str(base_dir).rstrip(os.sep))
         parent = os.path.dirname(base_dir)
         base_name = os.path.basename(base_dir)
 
@@ -860,11 +844,30 @@ def make_csv(root_dir, out_path="", no_time=False):
             lst.sort(key=lambda x: x[1])
             return lst, pref
         elif len(groups) > 1:
-            # Multiple prefixes found; flatten but prefer the largest group (common case: many threads of one prefix)
+            # Prefer the largest group (common case: many threads of one prefix)
             pref = max(groups.items(), key=lambda kv: len(kv[1]))[0]
             lst = groups[pref]
             lst.sort(key=lambda x: x[1])
             return lst, pref
+
+        # Case 3 (NEW): base_dir is just a *prefix path* like "out/test"
+        # Look in the parent for *exact* matches "test_t{n}" (exclude "test_something_t{n}").
+        prefix = base_name
+        if os.path.isdir(parent) and prefix:
+            found = []
+            try:
+                for name in os.listdir(parent):
+                    m4 = re.match(rf"^{re.escape(prefix)}_t(\d+)$", name)
+                    if m4:
+                        tnum = int(m4.group(1))
+                        full = os.path.join(parent, name)
+                        if os.path.isdir(full):
+                            found.append((full, tnum))
+            except FileNotFoundError:
+                pass
+            if found:
+                found.sort(key=lambda x: x[1])
+                return found, prefix
 
         # Fallback: just treat base_dir as a single directory with unknown thread count
         return [(base_dir, None)], os.path.basename(base_dir)
@@ -913,21 +916,9 @@ def make_csv(root_dir, out_path="", no_time=False):
             ebg_path = os.path.join(tree_dir, "ebg_summary.csv")
             qd_path = os.path.join(tree_dir, "quartet_dists.txt")
 
-            tree_dict_path = os.path.join(tree_dir, "tree_dict.json")
-            if not os.path.isfile(tree_dict_path):
-                print(f"no tree dict! {exp_id}")
-
-            num_part = 1
-            try:
-                with open(tree_dict_path) as file:
-                    tree_dct = json.load(file)
-                num_part = tree_dct[0]["OVERALL_NUM_PARTITIONS"]
-            except Exception as e:
-                print(f"error with {tree_dir}")
-                print(e)
-
-            if num_part > 1 and not os.path.isfile(consel_path):
-                print(f"{exp_id}: part > 1 and no consel!")
+            #tree_dict_path = os.path.join(tree_dir, "tree_dict.json")
+            #if not os.path.isfile(tree_dict_path):
+            #    print(f"no tree dict! {exp_id}")
 
             exp_incomp = False
             for p in [order_path, diff_path, llh_path, rfs_path, log_path, ntd_path, consel_path]:
@@ -1034,7 +1025,7 @@ def msas_to_datasets(*dirs, ext=""):
     if ext:
         accepted_exts.append(ext)
 
-    with open("config.yaml") as file:
+    with open("../../../config.yaml") as file:
         config_dct = yaml.safe_load(file)
     raxml_ng_path = os.path.abspath(config_dct["software"]["raxml_ng"]["command"])
 
@@ -1553,9 +1544,9 @@ def _prepare_datasets_from_source(source_dir, dest_dir="", dest_dir_suffix="", c
         out_root = dest_dir
     else:
         if not dest_dir_suffix:
-            out_root = os.path.join("out", base_name)
+            out_root = os.path.join("../../../out", base_name)
         else:
-            out_root = os.path.join("out", f"{base_name}_{dest_dir_suffix}")
+            out_root = os.path.join("../../../out", f"{base_name}_{dest_dir_suffix}")
         print(f"destination directory for MSAs not specified. thus it's set to {out_root}")
 
     create_dir_if_needed(out_root)

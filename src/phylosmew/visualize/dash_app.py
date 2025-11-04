@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
+import base64
+import io
+import os
+
 from dash import Dash, dcc, html, Input, Output, State
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-
 import pandas as pd
 import numpy as np
-import base64, io
-
-# NEW: multiple-testing correction for Wilcoxon
 from statsmodels.stats.multitest import multipletests
 
 APP_TITLE = "Phylogenetic Inference Benchmark Dashboard"
@@ -982,5 +982,59 @@ def update_graph(df_json, category, selected_tools, thread_selected, xvar, yvar,
     main = make_figure(df, long_df, category, selected_tools, counts_map, consel_test)
     return main, blank, ""
 
+def _set_layout_prop(component, target_id, prop, value):
+    """Recursively find a component by id in the layout tree and set a prop."""
+    # Dash components have .id and .children; children can be a component or list
+    if getattr(component, "id", None) == target_id:
+        setattr(component, prop, value)
+        return True
+    kids = getattr(component, "children", None)
+    if kids is None:
+        return False
+    if isinstance(kids, (list, tuple)):
+        for child in kids:
+            if _set_layout_prop(child, target_id, prop, value):
+                return True
+    else:
+        return _set_layout_prop(kids, target_id, prop, value)
+    return False
+
+
+def _preload_csv_to_json(csv_path: str):
+    """Load CSV like the upload callback, return (json, info_component)."""
+    df = pd.read_csv(csv_path)
+    # validate minimal schema
+    missing = [c for c in ("exp_id", "difficulty") if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required column(s): {', '.join(missing)}")
+
+    # same keep-list as in load_data()
+    keep_prefixes = ("llh_", "rf_true_", "ntd_true_", "abs_time_", "consel_", "exp_id", "difficulty", "thread_num")
+    cols = [c for c in df.columns if c.startswith(keep_prefixes) or c in ("exp_id", "difficulty")]
+    df = df[cols].copy()
+
+    df_json = df.to_json(date_format="iso", orient="split")
+    info = html.Span(f"Loaded: {os.path.basename(csv_path)}  •  rows={len(df)}")
+    return df_json, info
+
+
+def run_server(csv=None, host="0.0.0.0", port=8050, debug=False):
+    """
+    Start the Dash app. If `csv` is a path, preload it into the dcc.Store so
+    the dashboard is usable immediately (no drag & drop).
+    """
+    if csv and os.path.isfile(csv):
+        try:
+            df_json, info = _preload_csv_to_json(csv)
+            # Inject into the existing layout:
+            _set_layout_prop(app.layout, "data-store", "data", df_json)
+            _set_layout_prop(app.layout, "file-info", "children", info)
+        except Exception as e:
+            # Leave the app usable even if preload fails
+            print(f"[run_server] Failed to preload CSV: {e}")
+
+    app.run(host=host, port=port, debug=debug)
+
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="127.0.0.1", debug=True)

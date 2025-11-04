@@ -1,0 +1,64 @@
+{% set name = "phylosmew" %}
+{% set version = "0.1.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  git_url: https://github.com/angtft/PhyloSmew.git
+  git_rev: v{{ version }}     # tag this in your repo
+
+channels:
+  - conda-forge
+  - bioconda
+channel_priority: strict
+
+build:
+  noarch: python
+  # Standard pattern in conda-build: build via pip inside the conda build env.
+  # (This does NOT require publishing to PyPI.)
+  script: "{{ PYTHON }} -m pip install . -vv"
+  entry_points:
+    - phylosmew = phylosmew.cli:app
+
+requirements:
+  host:
+    - python >=3.9
+    - pip
+    - setuptools
+  run:
+    - python >=3.9
+    - snakemake >=8
+    - pyyaml
+    - pandas
+    - numpy
+    - matplotlib
+    - biopython
+    - scikit-learn
+    - scikit-optimize
+    - dash
+    - plotly
+    - typer
+    - tqdist
+    - iqtree
+    - raxml-ng
+    - pythiaphylopredictor
+    - ete3
+    - consel
+    - ebg
+    - legacy-cgi
+    - statsmodels
+
+test:
+  commands:
+    - phylosmew --help
+
+about:
+  home: https://github.com/angtft/PhyloSmew
+  summary: "Phylogenetic Snakemake evaluation workflow (CLI + Dash)"
+  license: GPL-3.0-or-later
+
+extra:
+  recipe-maintainers:
+    - angtft
