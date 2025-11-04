@@ -35,4 +35,4 @@ package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.package-data]
-phylosmew = ["workflow/Snakefile", "templates/**"]
+phylosmew = ["workflow/Snakefile", "templates/config.default.yaml"]
