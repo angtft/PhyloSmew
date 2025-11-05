@@ -19,59 +19,44 @@ The project includes small wrappers for RAxML‑NG, IQ‑TREE (v2 / v3), FastTre
 ---
 
 ## Quick start
-On any OS, we recommend the usage of conda or mamba (you can get an installer at https://github.com/conda-forge/miniforge). 
+On any OS, we recommend the usage of mamba (you can get an installer at https://github.com/conda-forge/miniforge). 
 
 > Note that [RAxML-NG](https://github.com/amkozlov/raxml-ng) is needed for the evaluation part of the pipeline. There is no 
 Windows binary available; the easiest way to run everything would be by using [WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
-For macOS there is a RAxML-NG binary, but you need to download it and set the path in the `config.yaml`.
+For macOS there is a RAxML-NG binary, but you might need to download it and set the path in the `config.yaml`.
 
 
-### 1.) Clone (with submodules, required for RAxMLGroveScripts & PyPythia)
+### 1.) (Recommended) Create a fresh mamba environment and install PhyloSmew
 ```bash
-git clone --recursive https://github.com/angtft/PhyloSmew.git
-cd PhyloSmew
+mamba create -n phylosmew
+mamba activate phylosmew
+mamba install phylosmew -c conda-forge -c bioconda -c angtft
 ```
 
-### 2.) (Recommended) Create a fresh conda environment
+### 2.) Run the test workflow
+Create a directory to store your project. From there run
 ```bash
-conda create -n phylosmew
-conda activate phylosmew
+phylosmew init              # this creates a template 'config.yaml' in the cwd
+phylosmew run --cores 8     # run the tests specified in the 'config.yaml'
 ```
 
-### 3.) Install runtime dependencies (CLI tools + Python libs)
-> Note: scikit-learn==1.0.2 is required for the bundled PyPythia model
+### 3.) Aggregate results
+Collect all the results from the test runs into a CSV file.
 ```bash
-conda install -c conda-forge -c bioconda biopython matplotlib numpy pandas scikit-learn==1.0.2 snakemake tqdist ete3 scikit-optimize consel ebg
+phylosmew aggregate --root-dir out/smew_test
 ```
 
-### 4.) Run the workflow (see config options below)
+### (Optional) Run Dash app for interactive analysis
+Run the Dash app server, preloading the current CSV file, and open the displayed URL.
 ```bash
-snakemake --cores 8 --config used_dsc="smew_test"       # "smew_test" is the name of a predefined test run in the 'config.yaml'
+phylosmew visualize --csv smew_test.csv     
 ```
-
-### 5.) Aggregate results
-```bash
-python scripts.py make_csv out/smew_test
-```
-
-### (Optional) Dash app for interactive analysis
-```bash
-conda install -c conda-forge dash plotly statsmodels
-```
-
-### (Optional) Visualize (Dash app)
-```bash
-python dash_app.py 
-```
-then open the printed URL and upload the CSV.
-
-> Tip: the default `used_dsc` in `config.yaml` is set to `smew_test` for a quick sanity check.
 
 ---
 
 ## Installation notes
-- Linux executables for *RAxML‑NG* and *IQ‑TREE* are vendored via the `libs/RAxMLGroveScripts/tools` directory; you can override their paths in `config.yaml`.
-- For quartet distances (optional rules), install *tqDist* and ensure `tqdist.command` points to `all_pairs_quartet_dist` (or install via conda and keep the config entry as is).
+- Current versions of RAxML-NG and IQ-TREE are part of the conda package. To use your own binaries you can set the according paths in the `config.yaml` file.
+- For quartet distances (optional rules), install *tqDist* and ensure `tqdist.command` points to `all_pairs_quartet_dist` (or install via mamba and keep the config entry as is).
 
 ---
 
@@ -91,14 +76,7 @@ software:
 ```
 
 ### 2.) `tools`
-Define how each inference tool is run. You can:
-- Provide a complete command template (`command`) and an optional `command_partitioned` variant (used when a `partitions.txt` exists), **or**
-- Specify an `inference_class` implemented in `inference_tools.py`.
-
-Common placeholders available in `command` strings:
-`{exe_path}`, `{msa_path}`, `{model}`, `{threads}`, `{prefix}`, `{part_file_path}`.
-Note that the substitution model in the `{model}` placeholder might not be recognized by some inference tools (or mean something different, e.g., "GTR+G" for RAxML-NG 
-should be "GTR+G+FO" for IQ-TREE2). In such cases you should implement a class in `inference_tools.py` and translate the model strings for the tools.
+Define how each inference tool is run.
 
 Example (abridged):
 ```yaml
@@ -118,6 +96,16 @@ tools:
     add_flags: "--fast"       # concatenates "add_flags" to "command" and "command_partitioned" of the reference entry
 ```
 
+Common placeholders available in `command` strings:
+`{exe_path}`, `{msa_path}`, `{model}`, `{threads}`, `{prefix}`, `{part_file_path}`.
+Note that the substitution model in the `{model}` placeholder might not be recognized by some inference tools (or mean something different, e.g., "GTR+G" for RAxML-NG 
+should be "GTR+G+FO" for IQ-TREE2). In such cases you should implement a class in `inference_tools.py` (which is generated after running "phylosmew init") 
+and translate the model strings for the tools.
+You would then need to use `--tools` flag, or set the according path in the `plugins` section of the config file.
+```bash
+phylosmew run --tools inference_tools.py
+```
+
 You can also derive a tool from another via `reference` and append flags with `add_flags`.
 
 ### 3.) Which tools and threads to run
@@ -133,9 +121,8 @@ Select which dataset group to process (also becomes the output directory name un
 used_dsc: "smew_test"
 ```
 
-### 5.) Optional statistics
-There are some optional statistics that have been disabled by default in the Snakefile, which might be interesting to some. 
-To get them to work, you would need to uncomment the corresponding line in the rule "all" in the `Snakefile`.
+### 5.) Optional statistics (`optional_features`)
+You can also compute optional statistics by setting the values to `true` in the `optional_features` section.
 
 #### a.) Quartet distances
 Self-explanatory: You can compute quartet distances between all inferred trees using tqDist (just uncomment the line). 
@@ -187,8 +174,10 @@ data_sets:
     substitution_model: "GTR+G"     # set this!
     custom_msas: "path/to/msas/"    # set this!
 ```
-This would run the `copy_datasets()` function in `scripts.py` to copy the MSAs. Thus, if something goes wrong, you can refer to the 
-documentation and implementation there.
+This would be equivalent to running the "copy-msas" command as:
+```bash
+phylosmew copy-msas --source-dir path/to/msas --dest-dir ./out/dsc_name --clean
+```
 
 #### b.) Manual setup
 You would need to set up the directories in the following structure in the `./out/` directory:
@@ -202,7 +191,7 @@ You would need to set up the directories in the following structure in the `./ou
 
 Then, execute:
 ```bash
-python scripts.py create_repr_files out/{dsc-name}
+phylosmew create-repr-files --root-dir out/dsc_name
 ```
 
 ---
@@ -211,7 +200,7 @@ python scripts.py create_repr_files out/{dsc-name}
 
 The results of the pipeline execution can be collected into a `.csv` file using
 ```bash
-python scripts.py make_csv out/{dsc-name}
+phylosmew aggregate --root-dir out/dsc_name
 ```
 The CSV should contain the [Pythia](https://doi.org/10.1093/molbev/msac254)-difficulty of the MSA, 
 log-likelihood differences to "true" tree (or "best-known" tree, if no true tree available), RF- and NT-distances to true tree, 
@@ -220,7 +209,7 @@ and execution times.
 
 You can run the Dash app for some simple visualization of the results.
 ```bash
-python dash_app.py 
+phylosmew visualize --csv dsc_name.csv
 ```
 
 ---
@@ -230,7 +219,8 @@ python dash_app.py
 ### 1. "Test run"
 For a simple test run, refer to the "Quick start" above. If everything is installed, you can simply run (assuming you have 8 cores):
 ```bash
-snakemake --cores 8 --config used_dsc="smew_test" num_threads=[1,4]
+phylosmew init
+phylosmew run --cores 8 -- --config used_dsc="smew_test" num_threads=[1,4]
 ```
 This should start a run with 231 jobs, which should finish quite fast, since the datasets are pretty small. 
 You should find two directories in "./out/": "smew_test_t1" (contains runs using 1 thread) and "smew_test_t4" (contains runs using 4 threads).
@@ -252,12 +242,29 @@ define your own tools (see above) and add your own tools to this list. Set the `
 #### c.) Delete existing evaluation files
 Most of the evaluation is bound to knowing the "best" tree. Thus, you'd need to delete the already computed evaluation files using 
 ```bash
-python scripts.py reset_evaluation out/{datasets}
+phylosmew reset-evaluation --root-dir out/dsc_dir_t{n}
 ```
 
 ### 3. "Bring Your Own Dataset"
 In case you'd like to use your own datasets, refer to the description in "MSAs" above. For example, you could use this to 
 create MSAs with different aligners and investigate their impact on the final tree inference.
+First run this:
+```bash
+phylosmew init
+phylosmew copy-msas --source-dir path/to/msas/x --dest-dir path/to/destination
+```
+This will copy your datasets to path/to/destination/x (x is basename of the source directory). Then you need to add a new dsc to the `config.yaml`.
+```yaml
+data_sets:
+  # ...
+  x:                         
+    source: "TB"                    # set this to "TB", ignore the meaning (legacy stuff, will be renamed/redone in future)
+    substitution_model: "GTR+G"     # select a model to pass to your inference tools
+```
+Then, you can run the inferences:
+```bash
+phylosmew run --cores 8 -- --config used_dsc=x    # everything after " -- " is passed as parameter to snakemake
+```
 
 ---
 

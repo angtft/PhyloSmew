@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "phylosmew"
-version = "0.1.0"
+version = "0.1.2"
 description = "Phylogenetic Snakemake evaluation workflow (CLI + Dash)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "GPL-3.0-or-later"}  # adjust
+license = {text = ""}  # adjust
 authors = [{ name = "PhyloSmew Authors"}]
 dependencies = [
     "typer>=0.9,<1.0",
@@ -35,4 +35,9 @@ package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.package-data]
-phylosmew = ["workflow/Snakefile", "templates/config.default.yaml"]
+phylosmew = [
+    "workflow/Snakefile",
+    "templates/config.default.yaml",
+    "templates/inference_tools.user.py",
+    "libs/RAxMLGroveScripts/**"
+]

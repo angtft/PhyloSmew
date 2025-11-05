@@ -4,10 +4,15 @@
 software:
   raxml_ng:
     command: "raxml-ng"         # path to executable. this should be already included in this repo
-  iqtree2:
-    command: "iqtree2"          # path to executable. this should be already included in this repo
   tqdist:
     command: "all_pairs_quartet_dist"       # (optional) only needed if the rule is executed -> uncomment the respective line in "rule all" in the Snakemake file
+
+plugins:
+  inference_tools: ""           # set the path to your "inference_tools.py" if used
+
+optional_features:
+  quartet: false
+  ebg: false
 
 
 # 2. define tools

@@ -1,7 +1,6 @@
 import datetime
+import importlib.util
 import json
-
-import numpy as np
 import os
 from pathlib import Path
 import shutil
@@ -11,12 +10,31 @@ import traceback
 
 import ete3
 from Bio import Phylo, SeqIO, Seq, SeqRecord
+import numpy as np
 
-from phylosmew.legacy import inference_tools, scripts, util
+#from phylosmew.legacy import inference_tools        # we replaced this with the dynamic loader below
+from phylosmew.legacy import scripts, util
 from pypythia.prediction import predict_difficulty as pythia_predict_difficulty
 from phylosmew.legacy.util import *
 from phylosmew.libs import _RGS_ROOT
 import org_script as rgs
+
+
+def _load_tools_module():
+    path = os.environ.get("PHYLOSMEW_TOOLS_PATH")
+    if path and os.path.isfile(path):
+        spec = importlib.util.spec_from_file_location("phylosmew_user.inference_tools", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        print(f"[PhyloSmew] Using user tools from: {path}")
+        return mod
+    else:
+        from phylosmew.legacy import inference_tools as mod
+        print(f"[PhyloSmew] Using packaged tools (phylosmew.legacy.inference_tools)")
+        return mod
+
+inference_tools = _load_tools_module()
+
 
 configfile: "config.yaml"
 
@@ -44,7 +62,7 @@ raxml_ng_path = os.path.abspath(config["software"]["raxml_ng"]["command"])
 if not os.path.isfile(raxml_ng_path):
     raxml_ng_path = config["software"]["raxml_ng"]["command"]
 
-iqt2_path = os.path.abspath(config["software"]["iqtree2"]["command"])
+iqt2_path = os.path.abspath(config["software"]["iqtree2"]["command"]) if "iqtree2" in config["software"] else ""
 tqdist_path = config["software"]["tqdist"]["command"]   # this can be a path or just an alias (in case tqDist was installed globally)
 rgs_db_path = os.path.abspath(os.path.join("../libs","RAxMLGroveScripts", dsc_db))
 kf_script_path = os.path.abspath("kfdist.r")
@@ -748,12 +766,29 @@ if EXISTING_BASE_DCT:
 
 dsc_tree_ids = get_tree_ids(BASE_OUT, dsc_source)
 
+FEATURES = config.get("optional_features", {})
+DO_QUARTET = bool(FEATURES.get("quartet", False))
+DO_EBG     = bool(FEATURES.get("ebg", False))
+
+BASE_TARGETS = [
+    expand("{out_dir}/{tree_id}/cleaned_dir", out_dir=ALL_OUT, tree_id=dsc_tree_ids)
+]
+ALL_TARGETS = list(BASE_TARGETS)
+if DO_QUARTET:
+    ALL_TARGETS += [
+        expand("{out_dir}/{tree_id}/quartet_dists.txt", out_dir=ALL_OUT, tree_id=dsc_tree_ids)
+    ]
+if DO_EBG:
+    ALL_TARGETS += [
+        expand("{out_dir}/{tree_id}/ebg_summary.csv", out_dir=ALL_OUT, tree_id=dsc_tree_ids)
+    ]
 
 rule all:
     input:
-        clean   = expand("{out_dir}/{tree_id}/cleaned_dir", out_dir=ALL_OUT, tree_id=dsc_tree_ids),
-        #ebg     = expand("{out_dir}/{tree_id}/ebg_summary.csv", out_dir=ALL_OUT, tree_id=dsc_tree_ids),     # Uncomment to compute light-weight bootstrap support statistics using EBG
-        #quartet = expand("{out_dir}/{tree_id}/quartet_dists.txt", out_dir=ALL_OUT, tree_id=dsc_tree_ids),   # Uncomment to also compute quartet distances
+        all_targets = ALL_TARGETS
+        #clean   = expand("{out_dir}/{tree_id}/cleaned_dir", out_dir=ALL_OUT, tree_id=dsc_tree_ids),
+        #ebg     = expand("{out_dir}/{tree_id}/ebg_summary.csv", out_dir=ALL_OUT, tree_id=dsc_tree_ids),
+        #quartet = expand("{out_dir}/{tree_id}/quartet_dists.txt", out_dir=ALL_OUT, tree_id=dsc_tree_ids),
 
 
 rule clean:
@@ -809,7 +844,7 @@ rule replicate_dataset:
     output:
         msas = expand("{out_dir}/{{tree_id}}/assembled_sequences.fasta", out_dir=OTHER_OUT),
         diffs = expand("{out_dir}/{{tree_id}}/difficulty", out_dir=OTHER_OUT),
-        best_trees = expand("{out_dir}/{{tree_id}}/tree_best.newick", out_dir=OTHER_OUT),
+        #best_trees = expand("{out_dir}/{{tree_id}}/tree_best.newick", out_dir=OTHER_OUT),
     run:
         import os, shutil
         for dst in output.msas:
@@ -820,11 +855,11 @@ rule replicate_dataset:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             if not os.path.exists(dst) or os.path.getmtime(dst) < os.path.getmtime(input.base_diff):
                 shutil.copy2(input.base_diff, dst)
-        for dst in output.best_trees:
-            base_tree_path = os.path.join(os.path.dirname(input.base_msa), "tree_best.newick")
-            if (os.path.isfile(base_tree_path) and
-                    (not os.path.exists(dst) or os.path.getmtime(dst) < os.path.getmtime(input.base_best_tree))):
-                shutil.copy2(base_tree_path, dst)
+
+            base_tree_path = os.path.join(os.path.dirname(input.base_msa),"tree_best.newick")
+            dst_dir = os.path.dirname(dst)
+            if os.path.exists(base_tree_path):
+                shutil.copy2(base_tree_path, dst_dir)
 
 
 rule run_inference:

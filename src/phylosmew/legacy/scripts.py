@@ -1004,8 +1004,9 @@ def make_csv(root_dir, out_path="", no_time=False):
             df = pd.concat([df, pd.DataFrame(temp_dct)], sort=False)
 
             if counter % 100 == 0:
-                print(f"{counter}")
+                print(f"Collected {counter}")
             counter += 1
+    print(f"Collected {counter}")
 
     # Write CSV
     if not out_path:
@@ -1117,95 +1118,97 @@ def plot_pd_llh_combined(file_path, out_dir, _names=[]):
     num_buckets = 50
     df = pd.read_csv(file_path)
 
-    names = _names
-    if not _names:
+    names = list(_names)
+    if not names:
         for col in list(df.columns):
             if col.startswith("llh_"):
                 names.append(col.split("llh_")[1])
 
-    fig, axs = plt.subplots(int(len(names) / 2), int(len(names) / 2), figsize=(6 * len(names) / 2, 4 * len(names) / 2),
-                            sharex=True, sharey=True,
-                            layout="constrained")
-    fig.tight_layout(rect=[2, 0.06, 1, 0.95])
+    # Layout: 2 rows, ceil(N/2) columns (or 1x1 when N==1)
+    n = len(names)
+    rows = 1 if n == 1 else 2
+    cols = math.ceil(n / rows)
+
+    # Always get a 2-D array of axes
+    fig, axs = plt.subplots(
+        rows, cols,
+        figsize=(6 * cols, 4 * rows),
+        sharex=True, sharey=True,
+        constrained_layout=True,
+        squeeze=False,          # <-- key: always 2-D array
+    )
 
     shared_ax = None
     legend_drawn = False
-    for j in range(len(names)):
-        name = names[j]
+
+    for j, name in enumerate(names):
+        r, c = divmod(j, cols)
+        ax = axs[r, c]
+
         cat_name = f"llh_{name}"
-        ax = axs[int(j / (len(names)/2)), j % int(len(names)/2)]
-        # ax = plt.subplot(2, 2, j+1, sharex=shared_ax, sharey=shared_ax)
-        #ax = plt.subplot(2, 2, j + 1)
 
         df_pars = copy.deepcopy(df[[f"llh_{name}", "difficulty"]])
-        df_pars[cat_name] = df["llh_true"] - df[f"llh_{name}"]
+        # absolute difference to match the y-label and avoid negatives with log scale
+        df_pars[cat_name] = (df["llh_true"] - df[f"llh_{name}"]).abs()
 
-        # print(df_pars)
+        # bucket difficulty into fixed bins
         for i in range(len(df_pars["difficulty"])):
             df_pars.iat[i, 1] = math.floor(df_pars.iat[i, 1] * num_buckets) / num_buckets
 
         group_pars = df_pars.groupby("difficulty")
 
-        mean_val = group_pars.mean().rename(columns={name: "mean_llh"})
-        median_val = group_pars.median().rename(columns={name: "median_llh"})
-        val_25perc = group_pars.quantile(q=.25).rename(columns={name: "llh_25perc"})
-        val_75perc = group_pars.quantile(q=.75).rename(columns={name: "llh_75perc"})
-        val_5perc = group_pars.quantile(q=.05).rename(columns={name: "llh_5perc"})
-        val_95perc = group_pars.quantile(q=.95).rename(columns={name: "llh_95perc"})
-        max_llh = group_pars.max().rename(columns={name: "max_llh"})
-        min_llh = group_pars.min().rename(columns={name: "min_llh"})
-        count = group_pars.count().rename(columns={name: "count"})
+        mean_val = group_pars.mean().rename(columns={cat_name: "mean_llh"})
+        median_val = group_pars.median().rename(columns={cat_name: "median_llh"})
+        val_25perc = group_pars.quantile(q=.25).rename(columns={cat_name: "llh_25perc"})
+        val_75perc = group_pars.quantile(q=.75).rename(columns={cat_name: "llh_75perc"})
+        val_5perc = group_pars.quantile(q=.05).rename(columns={cat_name: "llh_5perc"})
+        val_95perc = group_pars.quantile(q=.95).rename(columns={cat_name: "llh_95perc"})
+        max_llh = group_pars.max().rename(columns={cat_name: "max_llh"})
+        min_llh = group_pars.min().rename(columns={cat_name: "min_llh"})
+        count = group_pars.count().rename(columns={cat_name: "count"})
 
-        mean_val["mean_llh"] = group_pars.mean()
-        median_val["median_llh"] = group_pars.median()
-        val_25perc["llh_25perc"] = group_pars.quantile(q=.25)
-        val_75perc["llh_75perc"] = group_pars.quantile(q=.75)
-        val_5perc["llh_5perc"] = group_pars.quantile(q=.05)
-        val_95perc["llh_95perc"] = group_pars.quantile(q=.95)
-        max_llh["max_llh"] = group_pars.max()
-        min_llh["min_llh"] = group_pars.min()
+        merged_df = pd.concat(
+            [mean_val, median_val, val_25perc, val_75perc, val_5perc, val_95perc, max_llh, min_llh, count],
+            join="outer", axis=1
+        )
 
-        data_frames = [mean_val, median_val, val_25perc, val_75perc, val_5perc, val_95perc, max_llh, min_llh, count]
-        merged_df = pd.concat(data_frames, join="outer", axis=1)
+        x       = merged_df.index
+        y_median = merged_df["median_llh"]
+        y_25 = merged_df["llh_25perc"]
+        y_75 = merged_df["llh_75perc"]
+        y_5 = merged_df["llh_5perc"]
+        y_95 = merged_df["llh_95perc"]
 
-        x = merged_df.index
-        y = merged_df.mean_llh
-        y_median = merged_df.median_llh
-        y_25 = merged_df.llh_25perc
-        y_75 = merged_df.llh_75perc
-        y_5 = merged_df.llh_5perc
-        y_95 = merged_df.llh_95perc
+        ax.plot(x, y_median, marker=".", label="median")
+        ax.plot(x, y_25, linestyle="-.", label="25th %")
+        ax.plot(x, y_75, linestyle="-.", label="75th %")
+        ax.plot(x, y_5,  linestyle="-.", label="5th %")
+        ax.plot(x, y_95, linestyle="-.", label="95th %")
 
-        ax.plot(x, y_median, color="darkorchid", marker=".", label="median")
-        ax.plot(x, y_25, color="darkorchid", linestyle="-.", label="25th %")
-        ax.plot(x, y_75, color="darkorchid", linestyle="-.", label="75th %")
-        ax.plot(x, y_5, color="goldenrod", linestyle="-.", label="5th %")
-        ax.plot(x, y_95, color="goldenrod", linestyle="-.", label="95th %")
-
-        if not legend_drawn and j == (int(len(names) / 2)):
+        if not legend_drawn and j == min(n - 1, cols):  # draw once
             ax.legend()
             legend_drawn = True
 
         ax.set_yscale("log")
-        if name in TOOL_NAME_DICT:
-            ax.set_title(f"{TOOL_NAME_DICT[name]}", fontsize=12)
-        else:
-            ax.set_title(f"{name}", fontsize=12)
+        ax.set_title(TOOL_NAME_DICT.get(name, name), fontsize=12)
 
         if j == 0:
             shared_ax = ax
 
-        ax.fill_between(x, y_25, y_75, alpha=0.1, color="darkorchid")
-        ax.fill_between(x, y_5, y_95, alpha=0.1, color="goldenrod")
+        ax.fill_between(x, y_25, y_75, alpha=0.1)
+        ax.fill_between(x, y_5, y_95,   alpha=0.1)
         ax.grid(alpha=0.2, which="both")
 
-        plt.subplots_adjust(wspace=0.1, hspace=0.15)
+    # hide any unused axes (odd N)
+    for k in range(n, rows * cols):
+        r, c = divmod(k, cols)
+        axs[r, c].set_visible(False)
 
     fig.supxlabel("difficulty", fontsize=16)
-    fig.supylabel(f"absolute LnL difference", fontsize=16)
+    fig.supylabel("absolute LnL difference", fontsize=16)
 
-    fig.savefig(os.path.join(out_dir, f'pd_llh.svg'), format='svg')
-    fig.savefig(os.path.join(out_dir, f'pd_llh.png'), format='png')
+    fig.savefig(os.path.join(out_dir, 'pd_llh.svg'), format='svg')
+    fig.savefig(os.path.join(out_dir, 'pd_llh.png'), format='png')
     fig.show()
 
 
