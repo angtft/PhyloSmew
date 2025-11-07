@@ -130,7 +130,7 @@ def aggregate(
 def visualize(
     csv: str = typer.Option(..., "--csv", help="Aggregated results CSV"),
     host: str = typer.Option("127.0.0.1", "--host"),
-    remote: int = typer.Option(False, "--remote", help="Equivalent to '--host=0.0.0.0'"),
+    remote: bool = typer.Option(False, "--remote", help="Equivalent to '--host=0.0.0.0'"),
     port: int = typer.Option(8050, "--port"),
 ):
     if remote:
