@@ -119,7 +119,7 @@ def run(
 def aggregate(
     run_dir: str = typer.Option(..., "--root-dir", help="Directory for a finished run (e.g., out/smew_test)"),
     out: Optional[str] = typer.Option(None, "--out", help="Where to write the aggregated CSV"),
-    no_time: bool = typer.Option(False, "--no-time", help="Skip runtime parsing to speed up aggregation"),
+    # no_time: bool = typer.Option(False, "--no-time", help="Skip runtime parsing to speed up aggregation"),
 ):
     if not out:
         base = os.path.basename(run_dir) or os.path.basename(os.path.dirname(run_dir))
@@ -130,8 +130,11 @@ def aggregate(
 def visualize(
     csv: str = typer.Option(..., "--csv", help="Aggregated results CSV"),
     host: str = typer.Option("127.0.0.1", "--host"),
+    remote: int = typer.Option(False, "--remote", help="Equivalent to '--host=0.0.0.0'"),
     port: int = typer.Option(8050, "--port"),
 ):
+    if remote:
+        host = "0.0.0.0"
     run_server(csv, host, port)
 
 # README helpers (wired to legacy.scripts)
@@ -165,7 +168,7 @@ def reset_evaluation_cmd(
     root_dir: str = typer.Option(..., "--root-dir", help="Root containing dataset subdirs"),
 ):
     scripts.reset_evaluation(root_dir)
-    typer.echo("Removed evaluation artifacts (rf/ntd/llh/true/… files).")
+    typer.echo("Removed evaluation artifacts (rf/ntd/llh/true/... files).")
 
 
 @app.command("create-repr-files", help="Creates creates a list of present datasets to pass to snakemake (usually not needed).")

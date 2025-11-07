@@ -258,7 +258,7 @@ This will copy your datasets to path/to/destination/x (x is basename of the sour
 data_sets:
   # ...
   x:                         
-    source: "TB"                    # set this to "TB", ignore the meaning (legacy stuff, will be renamed/redone in future)
+    source: "RGS_TB"                # set this to "RGS_TB", ignore the meaning (legacy stuff, will be renamed/redone in future)
     substitution_model: "GTR+G"     # select a model to pass to your inference tools
 ```
 Then, you can run the inferences:

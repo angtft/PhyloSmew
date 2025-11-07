@@ -1,6 +1,5 @@
 # User plugin for PhyloSmew: extend/override inference tools here.
 # This file is copied into your project on `phylosmew init`.
-# It will be loaded automatically if present.
 
 import os
 import subprocess
@@ -31,8 +30,8 @@ IQTREE2_BIONJ   = getattr(_base, "IQTREE2_BIONJ", None)
 
 
 
-# Further example which makes RAxML-NG infer 2000 trees (usage not recommended)
-# add something like the following to the "tools" section of the "config.yaml"
+# Further example which makes RAxML-NG infer 2000 trees (usage not recommended).
+# Add something like the following to the "tools" section of the "config.yaml"
 # raxml2000:
 #     path: "raxml-ng"
 #     inference_class: "RAxMLNG2000"
