@@ -125,11 +125,11 @@ used_dsc: "smew_test"
 You can also compute optional statistics by setting the values to `true` in the `optional_features` section.
 
 #### a.) Quartet distances
-Self-explanatory: You can compute quartet distances between all inferred trees using tqDist (just uncomment the line). 
+Self-explanatory: You can compute quartet distances between all inferred trees using tqDist. 
 
 #### b.) Predicted bootstrap support using EBG
 EBG is "a machine learning-based tool that predicts SBS branch support values for a given input phylogeny" (https://doi.org/10.1093/molbev/msae215). 
-You can uncomment the EBG support line in the `Snakefile` to run [EBG](https://github.com/wiegertj/EBG). 
+You can set the entry `ebg` to true to run [EBG](https://github.com/wiegertj/EBG). 
 This will create a directory for every dataset and tool containing the inferred tree with assigned predicted branch support values:
 ```
 ./out/<dsc-name>/<dataset-id>/ebg_<tool-name>/
