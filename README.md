@@ -268,9 +268,9 @@ phylosmew run --cores 8 -- --config used_dsc=x    # everything after " -- " is p
 
 ---
 
-## Preprint
+## Publication
 
-D. Höhler, J. Haag,  A. M. Kozlov, A. Stamatakis, (2022). 
-**A representative Performance Assessment of Maximum Likelihood based Phylogenetic Inference Tools** 
-*bioRxiv*.
-[https://doi.org/10.1101/2022.10.31.514545](https://doi.org/10.1101/2022.10.31.514545)
+D. Höhler, J. Haag,  A. M. Kozlov, B. Morel, A. Stamatakis, (2025). 
+**Performance Assessment of Phylogenetic Inference Tools using PhyloSmew** 
+*Bioinformatics Advances*.
+[https://doi.org/10.1093/bioadv/vbaf300](https://doi.org/10.1093/bioadv/vbaf300)
